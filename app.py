@@ -52,7 +52,7 @@ st.markdown("""
         padding-left: 12px;
     }
 
-    /* 스트림릿 내장 메트릭 상자 자체를 프리미엄 카드로 강제 변환 */
+    /* 스트림릿 내장 메트릭 상자 프리미엄 카드로 강제 변환 */
     div[data-testid="stMetric"] {
         background-color: #ffffff !important;
         border: 1px solid #e2e8f0 !important;
@@ -110,7 +110,7 @@ st.markdown("<br><hr>", unsafe_allow_html=True)
 tab1, tab2 = st.tabs(["📊 거시 통계 및 시설 현황 분석", "🔍 B2C 실시간 축산물 이력 검증"])
 
 with tab1:
-    # [데이터 로드 엔진] 1번, 3번 데이터 연동 및 최대 200개 대형 처리
+    # [데이터 로드 엔진]
     @st.cache_data(ttl=3600)
     def get_combined_data():
         fallback_df = pd.DataFrame({
@@ -137,7 +137,6 @@ with tab1:
             if isinstance(res, dict) and 'Grid_20161216000000000428_1' in res and 'row' in res['Grid_20161216000000000428_1']:
                 rows = res['Grid_20161216000000000428_1']['row']
                 df = pd.DataFrame(rows)
-                
                 required_cols = {'CTPRVN_NM': '시도명', 'LSTK_SLALTO_NM': '도축장명', 'LVS_CTGRY_NM': '축종', 'SLAU_IEM_CO': '도축실적'}
                 if all(col in df.columns for col in required_cols.keys()):
                     df = df.rename(columns=required_cols)
@@ -162,37 +161,50 @@ with tab1:
         if not raw_df.empty:
             top_10 = raw_df.head(10).copy()
             
-            # 심사위원용 화려한 고성능 3D 바 차트 렌더링 엔진 구축
+            # 검은 여백을 완전히 지우고 화면을 가득 채우는 최적화된 3D 엔진 세팅
             fig = go.Figure()
             
-            # 각 도축장 데이터를 3D 직육면체 볼륨 기둥으로 시각화 계산
             for idx, row in top_10.iterrows():
-                x_box = [row['도축장명'], row['도축장명']]
-                y_box = [0, 1] 
-                z_box = [[0, row['도축실적']], [0, row['도축실적']]]
+                # 두께감을 주어 웅장한 입체 기둥 형태로 데이터 형상화
+                x_coords = [row['도축장명'], row['도축장명']]
+                y_coords = [0.2, 0.8]  # 기둥의 두께 범위를 늘려 꽉 차게 변경
+                z_coords = [[0, row['도축실적']], [0, row['도축실적']]]
                 
-                # 축종별 시그니처 프리미엄 컬러 매핑
-                color_map = {'돼지': '#2563eb', '소': '#0f172a', '닭': '#94a3b8'}
+                color_map = {'돼지': '#2563eb', '소': '#0f172a', '닭': '#64748b'}
                 bar_color = color_map.get(row['축종'], '#475569')
                 
                 fig.add_trace(go.Surface(
-                    x=x_box, y=y_box, z=z_box,
+                    x=x_coords, y=y_coords, z=z_coords,
                     colorscale=[[0, bar_color], [1, bar_color]],
                     showscale=False,
-                    name=f"{row['도축장명']} ({row['축종']})",
+                    name=row['도축장명'],
                     hovertemplate=f"<b>{row['도축장명']}</b><br>실적: {row['도축실적']:,} 두/수<br><extra></extra>"
                 ))
             
+            # 💡 핵심 수정: 까만 여백을 완전 박멸하고 가득 채우는 카메라 줌인 레이아웃
             fig.update_layout(
                 scene=dict(
-                    xaxis=dict(title='사업장명', titlefont=dict(size=12), tickfont=dict(size=9)),
-                    yaxis=dict(title='', showticklabels=False, showgrid=False),
-                    zaxis=dict(title='도축량 (두)', titlefont=dict(size=12)),
-                    camera=dict(eye=dict(x=1.6, y=-1.6, z=1.2)), # 3D 최적 조감 시야각 설정
+                    xaxis=dict(
+                        title='', 
+                        tickfont=dict(size=11, color='#1e293b', font=dict(weight='bold')),
+                        gridcolor='#e2e8f0'
+                    ),
+                    yaxis=dict(showticklabels=False, showgrid=False, title='', range=[0, 1]),
+                    zaxis=dict(
+                        title='도축실적 (두)', 
+                        titlefont=dict(size=12, color='#475569'),
+                        tickfont=dict(size=10),
+                        gridcolor='#e2e8f0'
+                    ),
+                    # 카메라 거리를 가깝게 당겨서(eye 변수 최적화) 여백을 삭제하고 그래프를 크게 키움
+                    camera=dict(
+                        eye=dict(x=1.2, y=-1.1, z=0.8),
+                        center=dict(x=0, y=0, z=-0.1)
+                    ),
                     aspectmode='manual',
-                    aspectratio=dict(x=2, y=0.5, z=1.2)
+                    aspectratio=dict(x=1.8, y=0.3, z=0.9)
                 ),
-                margin=dict(l=0, r=0, t=10, b=10),
+                margin=dict(l=0, r=0, t=0, b=0), # 여백 제로 설정
                 height=420,
                 paper_bgcolor='rgba(0,0,0,0)',
                 font=dict(family="Pretendard")
@@ -211,7 +223,7 @@ with tab1:
         else:
             st.info("데이터 표를 구성할 내용이 없습니다.")
 
-    # 하단 영역: 4번 행안부 인허가 현황 현황판
+    # 하단 영역: 4번 행안부 인허가 현황
     st.markdown("<br><br>", unsafe_allow_html=True)
     st.markdown('<div class="section-title">🏢 전국 동물 도축업 인허가 및 영업 인프라 현황</div>', unsafe_allow_html=True)
     
@@ -220,7 +232,7 @@ with tab1:
         fallback_infra = pd.DataFrame({
             '사업장명': ['부경양돈농협', '도드람양돈농협', '대전충남양돈농협', '(주)우포바이오', '논산계룡축산',
                     '익산축협공판장', '안동봉화축협', '충북형축산유통', '김해축산물공판장', '삼포식품',
-                    '춘천농협도축장', '홍성축산물센터', '순천종합축산', '군산농협유통', '경주축산물센터'],
+                    '춘천농협도축장', '홍성축물센터', '순천종합축산', '군산농협유통', '경주축산물센터'],
             '도로명주소': ['경상남도 김해시 어방동', '경기도 안성시 일죽면', '충청남도 천안시 서북구', '경상남도 창녕군 계성면', '충청남도 논산시 노성면',
                     '전북 익산시 함열읍', '경북 안동시 제비원로', '충북 청주시 흥덕구', '경남 김해시 유하로', '경기 이천시 대장로',
                     '강원 춘천시 영서로', '충남 홍성군 홍성읍', '전남 순천시 중앙로', '전북 군산시 조촌로', '경북 경주시 산업로'],
@@ -249,7 +261,7 @@ with tab1:
 
 with tab2:
     # ------------------------------------------
-    # 2번 축평원 등급판정확인서 데이터 (데이터 가드 대폭 강화)
+    # 2번 축평원 등급판정확인서 데이터
     # ------------------------------------------
     st.markdown('<div class="section-title">🔍 실시간 축산물 등급판정 시스템 검증</div>', unsafe_allow_html=True)
     st.markdown("<p style='font-size:14px; color:#64748b; margin-bottom:25px;'>유통 중인 축산물의 이력번호(12자리)를 입력하면 실시간 정품 데이터와 판정 등급을 원장 추적 검증합니다.</p>", unsafe_allow_html=True)
@@ -285,18 +297,15 @@ with tab2:
                 issueDate = node_date.text.strip() if node_date is not None and node_date.text else demo_date
                 abattNm = node_nm.text.strip() if node_nm is not None and node_nm.text else demo_name
                 
-                # [★등급 데이터 타격 파싱 및 날짜 치환 원천 차단 알고리즘]
                 tags_to_check = ['.//lastGradeNm', './/gradeNm', './/judgeGradeNm', './/lastgradenm', './/gradenm', './/judgegradenm']
                 for tag in tags_to_check:
                     element = root.find(tag)
                     if element is not None and element.text and element.text.strip():
                         val = element.text.strip()
-                        # 등급 자리에 날짜 형태(예: -가 들어감)가 들어오거나 숫자가 길면 필터링
                         if "-" not in val and len(val) < 10:
                             judgeGradeNm = val
                             break
                 
-                # 재차 검증하여 등급명이 날짜로 유실되었거나 누락 시 보정
                 if judgeGradeNm == '-' or judgeGradeNm == '' or '-' in judgeGradeNm:
                     judgeGradeNm = demo_grade
                     
