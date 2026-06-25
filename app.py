@@ -52,7 +52,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 데이터 파이프라인 (발견된 실제 컬럼명 적용)
+# 2. 데이터 파이프라인
 # ==========================================
 def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
     if df.empty:
@@ -60,7 +60,6 @@ def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
         return df
         
     col_map = {c.upper(): c for c in df.columns}
-    
     for p_name in possible_names:
         upper_name = p_name.upper()
         if upper_name in col_map:
@@ -68,15 +67,12 @@ def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
             cleaned_data = df[actual_col].astype(str).str.replace(',', '', regex=False).str.strip()
             df[new_col_name] = pd.to_numeric(cleaned_data, errors='coerce').fillna(0)
             
-            # 데이터를 찾아서 변환에 성공했다면 즉시 리턴
             if df[new_col_name].sum() > 0:
                 return df
-                
     df[new_col_name] = 0
     return df
 
 def find_actual_col(df, possible_names):
-    """축종 등 텍스트 컬럼을 유연하게 찾아주는 헬퍼 함수"""
     col_map = {c.upper(): c for c in df.columns}
     for p_name in possible_names:
         if p_name.upper() in col_map:
@@ -94,7 +90,6 @@ def fetch_mafra_data():
     try:
         res1 = requests.get(url_sido, timeout=10).json()
         df_sido = pd.DataFrame(res1.get('Grid_20161216000000000423_1', {}).get('row', []))
-        # 💡 유저님이 찾아주신 THSMON, THSMON_ACMTL 추가
         df_sido = auto_detect_numeric_col(df_sido, ['THSMON', 'THSMON_ACMTL', 'AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN'])
     except Exception:
         pass 
@@ -102,7 +97,6 @@ def fetch_mafra_data():
     try:
         res2 = requests.get(url_factory, timeout=10).json()
         df_factory = pd.DataFrame(res2.get('Grid_20161216000000000428_1', {}).get('row', []))
-        # 💡 여기도 동일하게 적용
         df_factory = auto_detect_numeric_col(df_factory, ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
         
         bpl_col = find_actual_col(df_factory, ['BPL_NM', 'FCLTY_NM'])
@@ -204,8 +198,14 @@ with tab1:
         with col2:
             st.markdown(f"<div class='metric-card'><div class='metric-title'>집계된 지역 수</div><div class='metric-value'>{len(selected_sido)}<span class='metric-unit'>곳</span></div></div>", unsafe_allow_html=True)
         with col3:
-            top_region = filtered_sido.groupby(region_col)['AMOUNT'].sum().idxmax() if total_slaughter > 0 else "N/A"
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>물량 1위 지역</div><div class='metric-value' style='color:#F43F5E;'>{top_region}</div></div>", unsafe_allow_html=True)
+            # 🔥 로직 변경: 1위 지역 -> 1위 도축장 (df_factory 활용)
+            factory_name_col = find_actual_col(df_factory, ['BPL_NM', 'FCLTY_NM'])
+            if not df_factory.empty and factory_name_col and df_factory['AMOUNT'].sum() > 0:
+                top_factory = df_factory.groupby(factory_name_col)['AMOUNT'].sum().idxmax()
+            else:
+                top_factory = "집계안됨"
+                
+            st.markdown(f"<div class='metric-card'><div class='metric-title'>물량 1위 도축장</div><div class='metric-value' style='color:#F43F5E; font-size:1.4rem;'>{top_factory}</div></div>", unsafe_allow_html=True)
             
         if total_slaughter == 0:
             st.markdown("""
@@ -223,10 +223,11 @@ with tab1:
                 fig_sido.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig_sido, use_container_width=True)
             with c2:
-                # 💡 유저님이 찾아주신 축종 컬럼명(LVSTCKSPC_NM) 적용
                 species_col = find_actual_col(filtered_sido, ['LVSTCKSPC_NM', 'LSTK_KND_NM'])
                 if species_col:
-                    fig_kind = px.pie(filtered_sido, names=species_col, values='AMOUNT', hole=0.4, template='plotly_dark', color_discrete_sequence=px.colors.sequential.GoldReds)
+                    # 🔥 에러 해결: 존재하지 않는 테마 대신 안전한 커스텀 헥스 컬러코드 배열 주입
+                    premium_colors = ['#DDA853', '#F43F5E', '#3B82F6', '#10B981', '#8B5CF6']
+                    fig_kind = px.pie(filtered_sido, names=species_col, values='AMOUNT', hole=0.4, template='plotly_dark', color_discrete_sequence=premium_colors)
                     fig_kind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
                     st.plotly_chart(fig_kind, use_container_width=True)
     else:
