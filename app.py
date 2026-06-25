@@ -2,8 +2,7 @@ import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
+import plotly.express as px
 
 # 1. 프리미엄 페이지 디자인 테마 설정
 st.set_page_config(
@@ -31,7 +30,7 @@ st.markdown("""
         font-weight: 800; 
         color: #0f172a; 
         margin-bottom: 6px;
-        background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 100%);
+        background: linear-gradient(135deg, #0f172a 0%, #2563eb 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
     }
@@ -157,58 +156,34 @@ with tab1:
     col_graph, col_table = st.columns([6, 4])
     
     with col_graph:
-        st.markdown('<div class="section-title">🏆 주요 사업장별 누적 도축 실적 (TOP 10 입체 분석)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">🏆 주요 사업장별 누적 도축 실적 (TOP 10 실적 분석)</div>', unsafe_allow_html=True)
         if not raw_df.empty:
             top_10 = raw_df.head(10).copy()
+            # 실적 높은 순서대로 위에서 아래로 정렬되도록 가로형 맞춤 정렬
+            top_10 = top_10.sort_values(by='도축실적', ascending=True)
             
-            # 검은 여백을 완전히 지우고 화면을 가득 채우는 최적화된 3D 엔진 세팅
-            fig = go.Figure()
-            
-            for idx, row in top_10.iterrows():
-                # 두께감을 주어 웅장한 입체 기둥 형태로 데이터 형상화
-                x_coords = [row['도축장명'], row['도축장명']]
-                y_coords = [0.2, 0.8]  # 기둥의 두께 범위를 늘려 꽉 차게 변경
-                z_coords = [[0, row['도축실적']], [0, row['도축실적']]]
-                
-                color_map = {'돼지': '#2563eb', '소': '#0f172a', '닭': '#64748b'}
-                bar_color = color_map.get(row['축종'], '#475569')
-                
-                fig.add_trace(go.Surface(
-                    x=x_coords, y=y_coords, z=z_coords,
-                    colorscale=[[0, bar_color], [1, bar_color]],
-                    showscale=False,
-                    name=row['도축장명'],
-                    hovertemplate=f"<b>{row['도축장명']}</b><br>실적: {row['도축실적']:,} 두/수<br><extra></extra>"
-                ))
-            
-            # 💡 핵심 수정: 까만 여백을 완전 박멸하고 가득 채우는 카메라 줌인 레이아웃
-            fig.update_layout(
-                scene=dict(
-                    xaxis=dict(
-                        title='', 
-                        tickfont=dict(size=11, color='#1e293b', font=dict(weight='bold')),
-                        gridcolor='#e2e8f0'
-                    ),
-                    yaxis=dict(showticklabels=False, showgrid=False, title='', range=[0, 1]),
-                    zaxis=dict(
-                        title='도축실적 (두)', 
-                        titlefont=dict(size=12, color='#475569'),
-                        tickfont=dict(size=10),
-                        gridcolor='#e2e8f0'
-                    ),
-                    # 카메라 거리를 가깝게 당겨서(eye 변수 최적화) 여백을 삭제하고 그래프를 크게 키움
-                    camera=dict(
-                        eye=dict(x=1.2, y=-1.1, z=0.8),
-                        center=dict(x=0, y=0, z=-0.1)
-                    ),
-                    aspectmode='manual',
-                    aspectratio=dict(x=1.8, y=0.3, z=0.9)
-                ),
-                margin=dict(l=0, r=0, t=0, b=0), # 여백 제로 설정
-                height=420,
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(family="Pretendard")
+            # 💡 여백 버그 완전 박멸: 가독성 끝판왕 프리미엄 가로 바 차트 설계
+            fig = px.bar(
+                top_10,
+                x='도축실적',
+                y='도축장명',
+                color='축종',
+                orientation='h', # 세련된 가로형 레이아웃 지정
+                text_auto=',.0f', # 바 끝에 콤마 포맷팅된 숫자 상시 노출
+                color_discrete_sequence=['#2563eb', '#0f172a', '#94a3b8'], # 프리미엄 네이비/블루 테마
+                labels={'도축실적': '도축량 (두/수)', '도축장명': ''}
             )
+            
+            fig.update_layout(
+                plot_bgcolor='rgba(248, 250, 252, 0.4)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(family="Pretendard", size=12),
+                margin=dict(l=10, r=40, t=10, b=10),
+                height=420,
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            fig.update_traces(textposition='outside', cliponaxis=False) # 숫자가 잘리지 않고 깔끔하게 표출
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("선택한 조건에 부합하는 실적 데이터가 없습니다.")
@@ -232,7 +207,7 @@ with tab1:
         fallback_infra = pd.DataFrame({
             '사업장명': ['부경양돈농협', '도드람양돈농협', '대전충남양돈농협', '(주)우포바이오', '논산계룡축산',
                     '익산축협공판장', '안동봉화축협', '충북형축산유통', '김해축산물공판장', '삼포식품',
-                    '춘천농협도축장', '홍성축물센터', '순천종합축산', '군산농협유통', '경주축산물센터'],
+                    '춘천농협도축장', '홍성축산물센터', '순천종합축산', '군산농협유통', '경주축산물센터'],
             '도로명주소': ['경상남도 김해시 어방동', '경기도 안성시 일죽면', '충청남도 천안시 서북구', '경상남도 창녕군 계성면', '충청남도 논산시 노성면',
                     '전북 익산시 함열읍', '경북 안동시 제비원로', '충북 청주시 흥덕구', '경남 김해시 유하로', '경기 이천시 대장로',
                     '강원 춘천시 영서로', '충남 홍성군 홍성읍', '전남 순천시 중앙로', '전북 군산시 조촌로', '경북 경주시 산업로'],
