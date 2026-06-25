@@ -35,7 +35,7 @@ st.markdown("""
     }
     .metric-card:hover { border-color: #DDA853; transform: translateY(-2px); }
     .metric-title { font-size: 0.9rem; color: #94A3B8; font-weight: 600; text-transform: uppercase; margin-bottom: 8px; }
-    .metric-value { font-size: 2rem; color: #FFFFFF; font-weight: 700; }
+    .metric-value { font-size: 2rem; color: #FFFFFF; font-weight: 700; word-break: keep-all; }
     .metric-unit { font-size: 1rem; color: #DDA853; margin-left: 4px; }
     
     .main-title {
@@ -46,8 +46,6 @@ st.markdown("""
     .stTabs [data-baseweb="tab-list"] { gap: 24px; border-bottom: 1px solid #2D3446; }
     .stTabs [data-baseweb="tab"] { height: 50px; color: #94A3B8 !important; font-weight: 600; font-size: 1.1rem; }
     .stTabs [aria-selected="true"] { color: #DDA853 !important; border-bottom: 3px solid #DDA853 !important; }
-    
-    .debug-box { background-color: #3F1D1D; border-left: 5px solid #EF4444; padding: 20px; border-radius: 8px; margin: 20px 0; color: #FCA5A5; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -95,8 +93,8 @@ def fetch_mafra_data():
         df_factory = pd.DataFrame(res2.get('Grid_20161216000000000428_1', {}).get('row', []))
         df_factory = auto_detect_numeric_col(df_factory, ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
         
-        # 🔥 여기서 도축장 이름을 찾습니다. 실패시 빈 값("")이 되어 결합이 안 됩니다.
-        bpl_col = find_actual_col(df_factory, ['BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM', 'CMPNY_NM'])
+        # 🔥 찾아주신 SLAU_PLACE_NM 파이프라인 추가 완료!
+        bpl_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM', 'CMPNY_NM'])
         if bpl_col:
             df_factory['join_key'] = df_factory[bpl_col].astype(str).str.replace(" ", "", regex=True)
         else:
@@ -141,14 +139,13 @@ def verify_grade_confirm_mafra(issue_no):
     return None
 
 # ==========================================
-# 3. 사이드바 제어
+# 3. 데이터 결합 및 사이드바 (글로벌 필터)
 # ==========================================
 df_sido, df_factory = fetch_mafra_data()
 df_house = fetch_portal_data()
 
 df_master = pd.DataFrame()
 if not df_factory.empty and not df_house.empty and 'join_key' in df_factory.columns and 'join_key' in df_house.columns:
-    # 빈 문자열이 아닌 정상적인 키만 결합
     valid_factory = df_factory[df_factory['join_key'] != ""]
     df_master = pd.merge(valid_factory, df_house, on='join_key', how='inner')
 
@@ -166,63 +163,83 @@ with st.sidebar:
         st.warning("API 데이터 로딩 중입니다...")
     st.markdown("---")
 
+
 # ==========================================
 # 4. 메인 대시보드 렌더링
 # ==========================================
 st.markdown("<div class='main-title'>Livestock Data Intelligence</div>", unsafe_allow_html=True)
-st.markdown("<p style='color: #94A3B8; font-size: 1.1rem; margin-bottom: 2rem;'>농림축산식품부 실적 데이터 & 행정안전부 도축업 인프라 융합 플랫폼</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #94A3B8; font-size: 1.1rem; margin-bottom: 2rem;'>선택 지역 기반 도축장별 랭킹 및 실시간 융합 플랫폼</p>", unsafe_allow_html=True)
 
-tab1, tab2, tab3 = st.tabs(["📊 전국 도축 트렌드 (농식품부 실적)", "🏛️ 통합 거시 데이터 (농식품부+행안부)", "🔍 실시간 이력 역추적 체인"])
+tab1, tab2, tab3 = st.tabs(["📊 지역 내 도축장 랭킹 분석", "🏛️ 필터링된 마스터 인벤토리", "🔍 실시간 이력 역추적 체인"])
 
 with tab1:
-    if not df_sido.empty and selected_sido and region_col:
-        filtered_sido = df_sido[df_sido[region_col].isin(selected_sido)]
-        total_slaughter = filtered_sido['AMOUNT'].sum()
+    if selected_sido and region_col:
+        # 🔥 지역 필터 적용 (시도별 데이터 & 도축장별 데이터 모두 필터링)
+        filtered_sido = df_sido[df_sido[region_col].isin(selected_sido)] if not df_sido.empty else pd.DataFrame()
+        
+        factory_region_col = find_actual_col(df_factory, ['CTRD_NM', 'SIDO_NM'])
+        filtered_factory = pd.DataFrame()
+        if not df_factory.empty and factory_region_col:
+            filtered_factory = df_factory[df_factory[factory_region_col].isin(selected_sido)]
+        
+        total_slaughter = filtered_factory['AMOUNT'].sum() if not filtered_factory.empty else 0
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>전국 도축 총량</div><div class='metric-value'>{int(total_slaughter):,}<span class='metric-unit'>두</span></div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card'><div class='metric-title'>선택 지역 도축 총량</div><div class='metric-value'>{int(total_slaughter):,}<span class='metric-unit'>두</span></div></div>", unsafe_allow_html=True)
         with col2:
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>집계된 지역 수</div><div class='metric-value'>{len(selected_sido)}<span class='metric-unit'>곳</span></div></div>", unsafe_allow_html=True)
+            factory_count = filtered_factory['join_key'].nunique() if not filtered_factory.empty else 0
+            st.markdown(f"<div class='metric-card'><div class='metric-title'>해당 지역 가동 도축장 수</div><div class='metric-value'>{factory_count}<span class='metric-unit'>곳</span></div></div>", unsafe_allow_html=True)
         with col3:
-            factory_name_col = find_actual_col(df_factory, ['BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM', 'CMPNY_NM'])
-            if not df_factory.empty and factory_name_col and df_factory['AMOUNT'].sum() > 0:
-                top_factory = df_factory.groupby(factory_name_col)['AMOUNT'].sum().idxmax()
+            # 🔥 해당 지역 내에서 1위 도축장 계산
+            factory_name_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM', 'FCLTY_NM'])
+            if not filtered_factory.empty and factory_name_col and total_slaughter > 0:
+                top_factory = filtered_factory.groupby(factory_name_col)['AMOUNT'].sum().idxmax()
             else:
-                top_factory = "집계 불가(컬럼명 불일치)"
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>물량 1위 도축장</div><div class='metric-value' style='color:#F43F5E; font-size:1.4rem;'>{top_factory}</div></div>", unsafe_allow_html=True)
+                top_factory = "실적 없음"
+            st.markdown(f"<div class='metric-card'><div class='metric-title'>해당 지역 1위 도축장</div><div class='metric-value' style='color:#F43F5E; font-size:1.6rem;'>{top_factory}</div></div>", unsafe_allow_html=True)
             
         c1, c2 = st.columns(2)
         with c1:
-            chart_data = filtered_sido.groupby(region_col, as_index=False)['AMOUNT'].sum().sort_values(by='AMOUNT', ascending=True)
-            fig_sido = px.bar(chart_data, x='AMOUNT', y=region_col, orientation='h', color='AMOUNT', color_continuous_scale='Blues', template='plotly_dark')
-            fig_sido.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
-            st.plotly_chart(fig_sido, use_container_width=True)
+            st.markdown("#### 🏆 선택 지역 내 도축장별 실적 순위 (Top 15)")
+            if not filtered_factory.empty and factory_name_col and total_slaughter > 0:
+                # 🔥 차트 변경: 지역 비교가 아닌 '도축장 순위' 바 차트
+                factory_chart_data = filtered_factory.groupby(factory_name_col, as_index=False)['AMOUNT'].sum().sort_values(by='AMOUNT', ascending=False).head(15)
+                fig_factory = px.bar(factory_chart_data, x='AMOUNT', y=factory_name_col, orientation='h', color='AMOUNT', color_continuous_scale='Blues', template='plotly_dark')
+                fig_factory.update_layout(yaxis={'categoryorder':'total ascending'}, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig_factory, use_container_width=True)
+            else:
+                st.info("시각화할 도축장 실적 데이터가 부족합니다.")
+                
         with c2:
-            species_col = find_actual_col(filtered_sido, ['LVSTCKSPC_NM', 'LSTK_KND_NM'])
-            if species_col:
+            st.markdown("#### 🐖 선택 지역 내 축종별 도축 비율")
+            species_col = find_actual_col(filtered_factory, ['LVSTCKSPC_NM', 'LSTK_KND_NM'])
+            if not filtered_factory.empty and species_col and total_slaughter > 0:
                 premium_colors = ['#DDA853', '#F43F5E', '#3B82F6', '#10B981', '#8B5CF6']
-                fig_kind = px.pie(filtered_sido, names=species_col, values='AMOUNT', hole=0.4, template='plotly_dark', color_discrete_sequence=premium_colors)
+                fig_kind = px.pie(filtered_factory, names=species_col, values='AMOUNT', hole=0.4, template='plotly_dark', color_discrete_sequence=premium_colors)
                 fig_kind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig_kind, use_container_width=True)
+            else:
+                st.info("시각화할 축종 데이터가 부족합니다.")
+    else:
+        st.info("데이터가 없습니다. 사이드바에서 지역을 선택해주세요.")
 
 with tab2:
-    st.markdown("### 🏛️ 부처간 데이터 융합 마스터 인벤토리")
+    st.markdown("### 🏛️ 부처간 데이터 융합 마스터 인벤토리 (필터 연동)")
     if not df_master.empty:
-        df_display = df_master.sort_values(by='AMOUNT', ascending=False)
+        # 🔥 마스터 인벤토리도 사이드바 필터(selected_sido)에 맞게 연동 필터링
+        master_region_col = find_actual_col(df_master, ['CTRD_NM', 'SIDO_NM'])
+        if master_region_col and selected_sido:
+            filtered_master = df_master[df_master[master_region_col].isin(selected_sido)]
+        else:
+            filtered_master = df_master
+            
+        df_display = filtered_master.sort_values(by='AMOUNT', ascending=False)
+        
+        st.success(f"✅ 선택하신 지역의 농식품부 도축장 실적 데이터와 행안부 인허가 데이터 병합 결과입니다. (총 {len(df_display)}건)")
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("데이터 병합 대기 중입니다. (행안부/농식품부 양쪽에서 모두 데이터가 들어와야 표출됩니다)")
-        
-        # 🔥 디버그 모드 작동: 병합 실패 시 원본 도축장 데이터를 띄워줍니다.
-        st.markdown("""
-            <div class='debug-box'>
-                <h4 style='margin-top:0; color:#F87171;'>🚨 도축장명 추적 알림 (Debug Mode)</h4>
-                농식품부 서버가 도축장 이름 컬럼을 예상 밖의 영문 이름으로 보내고 있어 결합이 중단되었습니다.<br>
-                <strong>아래 표에서 'OO도축장', 'OO엘피씨' 같은 한글 이름이 들어있는 열(Column)의 영문 헤더 이름을 찾아주세요!</strong>
-            </div>
-        """, unsafe_allow_html=True)
-        st.dataframe(df_factory, use_container_width=True)
 
 with tab3:
     st.markdown("### 🔍 등급서(농식품부) ➔ 도축장 정보(행안부) 역추적")
