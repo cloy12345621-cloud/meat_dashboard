@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 # ==========================================
 # 0. API 인증키 설정 (출처별 분리)
 # ==========================================
+# ⚠️ 본인의 발급받은 'Decoding'된 인증키를 각각 입력하세요.
 PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23" 
 MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"
 
@@ -51,20 +52,30 @@ st.markdown("""
 
 
 # ==========================================
-# 2. 데이터 파이프라인 (에러 방어형 로직 탑재)
+# 2. 데이터 파이프라인 (쉼표 제거 및 대소문자 방어 로직 탑재)
 # ==========================================
 def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
-    """API가 수량 컬럼 이름을 마음대로 바꿔도 자동으로 찾아내는 방어 함수"""
+    """API가 제공하는 숫자에 쉼표(,)가 있거나 컬럼명이 달라져도 찾아내는 강력한 정제 함수"""
     if df.empty:
         df[new_col_name] = 0
         return df
         
-    for col in possible_names:
-        if col in df.columns:
-            df[new_col_name] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            return df
+    # 대소문자 섞임 방지용 컬럼 맵핑
+    col_map = {c.upper(): c for c in df.columns}
+    
+    for p_name in possible_names:
+        upper_name = p_name.upper()
+        if upper_name in col_map:
+            actual_col = col_map[upper_name]
             
-    # 일치하는 컬럼이 아예 없어도 에러가 나지 않도록 0으로 채운 안전한 컬럼 생성
+            # 🔥 핵심 수정: 데이터 안의 쉼표(,)와 공백을 모두 제거한 뒤 숫자로 강제 변환
+            cleaned_data = df[actual_col].astype(str).str.replace(',', '', regex=False).str.strip()
+            df[new_col_name] = pd.to_numeric(cleaned_data, errors='coerce').fillna(0)
+            
+            # 값이 정상적으로 추출되었다면 즉시 반환
+            if df[new_col_name].sum() > 0:
+                return df
+                
     df[new_col_name] = 0
     return df
 
@@ -79,15 +90,14 @@ def fetch_mafra_data():
     try:
         res1 = requests.get(url_sido, timeout=10).json()
         df_sido = pd.DataFrame(res1.get('Grid_20161216000000000423_1', {}).get('row', []))
-        # 도축수량 컬럼 이름이 AUCO_LSTK_AMN, SLAU_AMN 등 무엇이든 AMOUNT로 통합
-        df_sido = auto_detect_numeric_col(df_sido, ['AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN', 'auco_lstk_amn', 'slau_amn'])
+        df_sido = auto_detect_numeric_col(df_sido, ['AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN'])
     except Exception as e:
         pass 
 
     try:
         res2 = requests.get(url_factory, timeout=10).json()
         df_factory = pd.DataFrame(res2.get('Grid_20161216000000000428_1', {}).get('row', []))
-        df_factory = auto_detect_numeric_col(df_factory, ['SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN', 'slau_amn'])
+        df_factory = auto_detect_numeric_col(df_factory, ['SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
         
         if 'BPL_NM' in df_factory.columns:
             df_factory['join_key'] = df_factory['BPL_NM'].str.replace(" ", "", regex=True)
@@ -181,9 +191,9 @@ with tab1:
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            # 방어형 컬럼인 'AMOUNT'를 호출하여 절대 에러가 나지 않도록 처리
             total_slaughter = filtered_sido['AMOUNT'].sum()
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>전국 도축 총량</div><div class='metric-value'>{total_slaughter:,}<span class='metric-unit'>두</span></div></div>", unsafe_allow_html=True)
+            # int 변환 후 포맷팅하여 소수점 없는 깔끔한 정수로 표출
+            st.markdown(f"<div class='metric-card'><div class='metric-title'>전국 도축 총량</div><div class='metric-value'>{int(total_slaughter):,}<span class='metric-unit'>두</span></div></div>", unsafe_allow_html=True)
         with col2:
             st.markdown(f"<div class='metric-card'><div class='metric-title'>집계된 지역 수</div><div class='metric-value'>{len(selected_sido)}<span class='metric-unit'>곳</span></div></div>", unsafe_allow_html=True)
         with col3:
@@ -212,7 +222,6 @@ with tab2:
     if not df_master.empty:
         st.success("✅ 농식품부 실적 데이터(3번)와 행안부 인허가 데이터(4번)가 도축장명을 기준으로 성공적으로 결합되었습니다.")
         
-        # 화면에 출력할 때만 컬럼명을 예쁘게 매핑
         df_display = df_master.sort_values(by='AMOUNT', ascending=False)
         st.dataframe(
             df_display, 
