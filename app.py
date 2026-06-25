@@ -88,17 +88,17 @@ with tab1:
             {'시도명': '전남', '도축장명': '목포종합유통', '축종': '닭', '도축실적': 245000}
         ]
         
-        # 💡 [교정] 뒤에 번거로운 라인 표시(제1라인 등)를 완전히 제거하고 깨끗하게 대용량화 수치 보정
+        # 실제 데이터 형태로 깨끗하게 구성
         extended_rows = []
-        for i in range(45):
-            base = fallback_data[i % len(fallback_data)]
+        for i in range(len(fallback_data)):
+            base = fallback_data[i]
             extended_rows.append({
                 '시도명': base['시도명'],
                 '도축장명': base['도축장명'],
                 '축종': base['축종'],
-                '도축실적': int(base['도축실적'] * (1 - (i * 0.015)))
+                '도축실적': base['도축실적']
             })
-        default_df = pd.DataFrame(extended_rows).drop_duplicates().reset_index(drop=True)
+        default_df = pd.DataFrame(extended_rows)
 
         url = f"http://211.237.50.150:7080/openapi/{API_SERVICE_KEY}/json/Grid_20161216000000000428_1/1/1000"
         try:
@@ -147,4 +147,50 @@ with tab1:
     with st.spinner("🔄 공공데이터 분석 시스템 가동 중..."):
         raw_df = get_mafra_real_data()
 
-    if
+    if raw_df.empty:
+        raw_df = get_mafra_real_data.__wrapped__()
+
+    filtered_df = raw_df.copy()
+    if selected_region != "전국":
+        region_sub = selected_region[:2]
+        filtered_df = filtered_df[filtered_df['시도명'].str.contains(region_sub, na=False)]
+    if selected_animals:
+        filtered_df = filtered_df[filtered_df['축종'].isin(selected_animals)]
+    
+    filtered_df = filtered_df.sort_values(by='도축실적', ascending=False).reset_index(drop=True)
+    render_df = filtered_df if not filtered_df.empty else raw_df
+
+    col_graph, col_table = st.columns([6, 4])
+    
+    with col_graph:
+        st.markdown('<div class="section-title">🏆 누적 도축 실적 분석 (실시간 API 데이터 TOP 10)</div>', unsafe_allow_html=True)
+        if not render_df.empty:
+            top_10 = render_df.head(10).copy()
+            top_10 = top_10.sort_values(by='도축실적', ascending=True)
+            
+            fig = px.bar(
+                top_10, x='도축실적', y='도축장명', color='축종', orientation='h', text_auto=',.0f',
+                color_discrete_map={'돼지': '#2563eb', '소': '#0f172a', '닭': '#94a3b8'},
+                labels={'도축실적': '도축량 (두/수)', '도축장명': ''}
+            )
+            fig.update_layout(
+                plot_bgcolor='rgba(248, 250, 252, 0.4)', paper_bgcolor='rgba(0,0,0,0)',
+                font=dict(family="Pretendard", size=12), margin=dict(l=10, r=40, t=10, b=10), height=420
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    with col_table:
+        st.markdown('<div class="section-title">📋 API 원본 실적 순위 전체 데이터 시트</div>', unsafe_allow_html=True)
+        if not render_df.empty:
+            display_df = render_df.copy()
+            display_df.index = display_df.index + 1
+            display_df.index.name = '순위'
+            st.dataframe(display_df, use_container_width=True, height=385)
+
+with tab2:
+    st.markdown('<div class="section-title">🔍 실시간 축산물 등급판정 시스템 검증</div>', unsafe_allow_html=True)
+    st.markdown("<p style='font-size:14px; color:#64748b; margin-bottom:25px;'>유통 중인 축산물의 이력번호(12자리)를 입력하면 실시간 정품 데이터와 판정 등급을 원장 추적 검증합니다.</p>", unsafe_allow_html=True)
+    
+    col_input, col_action = st.columns([8, 2])
+    with col_input:
+        animal_no = st.text_input("개체식별번호(이력번호 12자리) 입력", value="1600
