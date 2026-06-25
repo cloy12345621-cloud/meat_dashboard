@@ -66,8 +66,8 @@ def fetch_mafra_data():
     [농림축산식품부 데이터] 
     2번: 시도별 도축실적 / 3번: 도축장별 도축실적 
     """
-    url_sido = f"http://211.237.50.150:7080/openapi/{fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677}/json/Grid_20161216000000000423_1/1/999"
-    url_factory = f"http://211.237.50.150:7080/openapi/{fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677}/json/Grid_20161216000000000428_1/1/999"
+    url_sido = f"http://211.237.50.150:7080/openapi/fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677/json/Grid_20161216000000000423_1/1/999"
+    url_factory = f"http://211.237.50.150:7080/openapi/fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677/json/Grid_20161216000000000428_1/1/999"
     
     df_sido = pd.DataFrame()
     df_factory = pd.DataFrame()
@@ -98,7 +98,7 @@ def fetch_portal_data():
     [공공데이터포털 데이터] 
     4번: 행정안전부 동물 도축업 조회
     """
-    url_house = f"https://apis.data.go.kr/1741000/slaughterhouses?serviceKey={f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23}&type=json&pIndex=1&pSize=1000"
+    url_house = f"https://apis.data.go.kr/1741000/slaughterhouses?serviceKey=f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23&type=json&pIndex=1&pSize=1000"
     df_house = pd.DataFrame()
     
     try:
@@ -121,7 +121,7 @@ def verify_grade_confirm_mafra(issue_no):
     1번: 축산물등급판정확인서 발급번호정보
     """
     # 농식품부/축평원 API 스키마
-    url_grade = f"https://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo?serviceKey={fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677}&issueNo={issue_no}"
+    url_grade = f"https://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo?serviceKey=fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677&issueNo={issue_no}"
     
     try:
         response = requests.get(url_grade, timeout=5)
