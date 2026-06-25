@@ -58,7 +58,6 @@ def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
     if df.empty:
         df[new_col_name] = 0
         return df
-        
     col_map = {c.upper(): c for c in df.columns}
     for p_name in possible_names:
         upper_name = p_name.upper()
@@ -66,7 +65,6 @@ def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
             actual_col = col_map[upper_name]
             cleaned_data = df[actual_col].astype(str).str.replace(',', '', regex=False).str.strip()
             df[new_col_name] = pd.to_numeric(cleaned_data, errors='coerce').fillna(0)
-            
             if df[new_col_name].sum() > 0:
                 return df
     df[new_col_name] = 0
@@ -84,28 +82,26 @@ def fetch_mafra_data():
     url_sido = f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000423_1/1/999"
     url_factory = f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999"
     
-    df_sido = pd.DataFrame()
-    df_factory = pd.DataFrame()
+    df_sido, df_factory = pd.DataFrame(), pd.DataFrame()
     
     try:
         res1 = requests.get(url_sido, timeout=10).json()
         df_sido = pd.DataFrame(res1.get('Grid_20161216000000000423_1', {}).get('row', []))
         df_sido = auto_detect_numeric_col(df_sido, ['THSMON', 'THSMON_ACMTL', 'AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN'])
-    except Exception:
-        pass 
+    except Exception: pass 
 
     try:
         res2 = requests.get(url_factory, timeout=10).json()
         df_factory = pd.DataFrame(res2.get('Grid_20161216000000000428_1', {}).get('row', []))
         df_factory = auto_detect_numeric_col(df_factory, ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
         
-        bpl_col = find_actual_col(df_factory, ['BPL_NM', 'FCLTY_NM'])
+        # 🔥 여기서 도축장 이름을 찾습니다. 실패시 빈 값("")이 되어 결합이 안 됩니다.
+        bpl_col = find_actual_col(df_factory, ['BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM', 'CMPNY_NM'])
         if bpl_col:
             df_factory['join_key'] = df_factory[bpl_col].astype(str).str.replace(" ", "", regex=True)
         else:
             df_factory['join_key'] = ""
-    except Exception:
-        pass
+    except Exception: pass
         
     return df_sido, df_factory
 
@@ -113,23 +109,17 @@ def fetch_mafra_data():
 def fetch_portal_data():
     url_house = f"https://apis.data.go.kr/1741000/slaughterhouses?serviceKey={PORTAL_API_KEY}&type=json&pIndex=1&pSize=1000"
     df_house = pd.DataFrame()
-    
     try:
         res = requests.get(url_house, timeout=10).json()
-        if 'slaughterhouses' in res:
-            df_house = pd.DataFrame(res['slaughterhouses'])
-        elif 'row' in res:
-            df_house = pd.DataFrame(res['row'])
+        if 'slaughterhouses' in res: df_house = pd.DataFrame(res['slaughterhouses'])
+        elif 'row' in res: df_house = pd.DataFrame(res['row'])
             
         if not df_house.empty:
             name_col = find_actual_col(df_house, ['bplNm', 'BPL_NM'])
             if name_col:
                 df_house['join_key'] = df_house[name_col].astype(str).str.replace(" ", "", regex=True)
-            else:
-                df_house['join_key'] = ""
-    except Exception:
-        pass
-        
+            else: df_house['join_key'] = ""
+    except Exception: pass
     return df_house
 
 def verify_grade_confirm_mafra(issue_no):
@@ -147,8 +137,7 @@ def verify_grade_confirm_mafra(issue_no):
                 "weight": item.findtext('weight', default='-'),
                 "inspectResult": item.findtext('inspectResult', default='적합')
             }
-    except Exception:
-        pass
+    except Exception: pass
     return None
 
 # ==========================================
@@ -159,7 +148,9 @@ df_house = fetch_portal_data()
 
 df_master = pd.DataFrame()
 if not df_factory.empty and not df_house.empty and 'join_key' in df_factory.columns and 'join_key' in df_house.columns:
-    df_master = pd.merge(df_factory, df_house, on='join_key', how='inner')
+    # 빈 문자열이 아닌 정상적인 키만 결합
+    valid_factory = df_factory[df_factory['join_key'] != ""]
+    df_master = pd.merge(valid_factory, df_house, on='join_key', how='inner')
 
 with st.sidebar:
     st.markdown("<h2 style='color: #DDA853; font-weight: 800;'>MEATRICS</h2>", unsafe_allow_html=True)
@@ -167,17 +158,13 @@ with st.sidebar:
     st.markdown("---")
     
     region_col = find_actual_col(df_sido, ['CTRD_NM', 'SIDO_NM'])
-    
     if not df_sido.empty and region_col:
         sido_options = list(df_sido[region_col].dropna().unique())
         selected_sido = st.multiselect("분석 대상 지역 필터", options=sido_options, default=sido_options)
     else:
         selected_sido = []
         st.warning("API 데이터 로딩 중입니다...")
-        
     st.markdown("---")
-    st.markdown("<div style='font-size:0.8rem; color:#475569;'>📊 농식품부 연동 완료<br>🏛️ 행안부 연동 완료</div>", unsafe_allow_html=True)
-
 
 # ==========================================
 # 4. 메인 대시보드 렌더링
@@ -198,40 +185,26 @@ with tab1:
         with col2:
             st.markdown(f"<div class='metric-card'><div class='metric-title'>집계된 지역 수</div><div class='metric-value'>{len(selected_sido)}<span class='metric-unit'>곳</span></div></div>", unsafe_allow_html=True)
         with col3:
-            # 🔥 로직 변경: 1위 지역 -> 1위 도축장 (df_factory 활용)
-            factory_name_col = find_actual_col(df_factory, ['BPL_NM', 'FCLTY_NM'])
+            factory_name_col = find_actual_col(df_factory, ['BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM', 'CMPNY_NM'])
             if not df_factory.empty and factory_name_col and df_factory['AMOUNT'].sum() > 0:
                 top_factory = df_factory.groupby(factory_name_col)['AMOUNT'].sum().idxmax()
             else:
-                top_factory = "집계안됨"
-                
+                top_factory = "집계 불가(컬럼명 불일치)"
             st.markdown(f"<div class='metric-card'><div class='metric-title'>물량 1위 도축장</div><div class='metric-value' style='color:#F43F5E; font-size:1.4rem;'>{top_factory}</div></div>", unsafe_allow_html=True)
             
-        if total_slaughter == 0:
-            st.markdown("""
-                <div class='debug-box'>
-                    <h4 style='margin-top:0; color:#F87171;'>🚨 데이터 추적 알림 (Debug Mode)</h4>
-                    API 응답은 정상이나, 해당 월의 수량 데이터가 모두 0으로 비어있을 수 있습니다.
-                </div>
-            """, unsafe_allow_html=True)
-            st.dataframe(df_sido, use_container_width=True)
-        else:
-            c1, c2 = st.columns(2)
-            with c1:
-                chart_data = filtered_sido.groupby(region_col, as_index=False)['AMOUNT'].sum().sort_values(by='AMOUNT', ascending=True)
-                fig_sido = px.bar(chart_data, x='AMOUNT', y=region_col, orientation='h', color='AMOUNT', color_continuous_scale='Blues', template='plotly_dark')
-                fig_sido.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
-                st.plotly_chart(fig_sido, use_container_width=True)
-            with c2:
-                species_col = find_actual_col(filtered_sido, ['LVSTCKSPC_NM', 'LSTK_KND_NM'])
-                if species_col:
-                    # 🔥 에러 해결: 존재하지 않는 테마 대신 안전한 커스텀 헥스 컬러코드 배열 주입
-                    premium_colors = ['#DDA853', '#F43F5E', '#3B82F6', '#10B981', '#8B5CF6']
-                    fig_kind = px.pie(filtered_sido, names=species_col, values='AMOUNT', hole=0.4, template='plotly_dark', color_discrete_sequence=premium_colors)
-                    fig_kind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
-                    st.plotly_chart(fig_kind, use_container_width=True)
-    else:
-        st.info("데이터가 없습니다. API 통신 상태를 확인해주세요.")
+        c1, c2 = st.columns(2)
+        with c1:
+            chart_data = filtered_sido.groupby(region_col, as_index=False)['AMOUNT'].sum().sort_values(by='AMOUNT', ascending=True)
+            fig_sido = px.bar(chart_data, x='AMOUNT', y=region_col, orientation='h', color='AMOUNT', color_continuous_scale='Blues', template='plotly_dark')
+            fig_sido.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig_sido, use_container_width=True)
+        with c2:
+            species_col = find_actual_col(filtered_sido, ['LVSTCKSPC_NM', 'LSTK_KND_NM'])
+            if species_col:
+                premium_colors = ['#DDA853', '#F43F5E', '#3B82F6', '#10B981', '#8B5CF6']
+                fig_kind = px.pie(filtered_sido, names=species_col, values='AMOUNT', hole=0.4, template='plotly_dark', color_discrete_sequence=premium_colors)
+                fig_kind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig_kind, use_container_width=True)
 
 with tab2:
     st.markdown("### 🏛️ 부처간 데이터 융합 마스터 인벤토리")
@@ -240,6 +213,16 @@ with tab2:
         st.dataframe(df_display, use_container_width=True)
     else:
         st.warning("데이터 병합 대기 중입니다. (행안부/농식품부 양쪽에서 모두 데이터가 들어와야 표출됩니다)")
+        
+        # 🔥 디버그 모드 작동: 병합 실패 시 원본 도축장 데이터를 띄워줍니다.
+        st.markdown("""
+            <div class='debug-box'>
+                <h4 style='margin-top:0; color:#F87171;'>🚨 도축장명 추적 알림 (Debug Mode)</h4>
+                농식품부 서버가 도축장 이름 컬럼을 예상 밖의 영문 이름으로 보내고 있어 결합이 중단되었습니다.<br>
+                <strong>아래 표에서 'OO도축장', 'OO엘피씨' 같은 한글 이름이 들어있는 열(Column)의 영문 헤더 이름을 찾아주세요!</strong>
+            </div>
+        """, unsafe_allow_html=True)
+        st.dataframe(df_factory, use_container_width=True)
 
 with tab3:
     st.markdown("### 🔍 등급서(농식품부) ➔ 도축장 정보(행안부) 역추적")
@@ -267,7 +250,5 @@ with tab3:
                     addr_col = find_actual_col(trace_result, ['rdnWhlAddr', 'ADDR', 'LOCPLC'])
                     addr = trace_result[addr_col].values[0] if addr_col else "상세주소 미상"
                     st.info(f"📍 도축장 행안부 등록 주소: {addr}")
-                else:
-                    st.warning("도축장명이 행안부 DB에 매칭되지 않습니다.")
-        else:
-            st.error("API 연결 실패 또는 원장 데이터 없음.")
+                else: st.warning("도축장명이 행안부 DB에 매칭되지 않습니다.")
+        else: st.error("API 연결 실패 또는 원장 데이터 없음.")
