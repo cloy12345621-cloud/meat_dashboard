@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 import requests
 import xml.etree.ElementTree as ET
-from difflib import get_close_matches
 
 # ==========================================
 # 0. API 인증키 설정
@@ -12,93 +11,261 @@ PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e
 MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"
 
 # ==========================================
-# 1. 페이지 설정 및 프리미엄 CSS
+# 1. 페이지 설정 및 디자인
 # ==========================================
-st.set_page_config(page_title="MEATRICS | 축산 데이터 플랫폼", layout="wide")
+st.set_page_config(
+    page_title="MEATRICS | 프리미엄 축산 통합 데이터 플랫폼",
+    page_icon="🥩",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
-    * { font-family: 'Pretendard', sans-serif !important; }
+    * { font-family: 'Pretendard', -apple-system, sans-serif !important; }
     .stApp { background-color: #0F1115; color: #E2E8F0; }
-    .metric-card { background: linear-gradient(135deg, #1E222B 0%, #14171E 100%); border: 1px solid #2D3446; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
-    .main-title { background: linear-gradient(90deg, #FFFFFF 0%, #A5B4FC 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; font-size: 3rem; margin-bottom: 1rem; }
+    
+    .metric-card {
+        background: linear-gradient(135deg, #1E222B 0%, #14171E 100%);
+        border: 1px solid #2D3446;
+        border-radius: 16px; padding: 24px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); margin-bottom: 20px;
+        transition: all 0.3s ease;
+    }
+    .metric-card:hover { border-color: #DDA853; transform: translateY(-2px); }
+    .metric-title { font-size: 0.9rem; color: #94A3B8; font-weight: 600; text-transform: uppercase; margin-bottom: 8px; }
+    .metric-value { font-size: 2rem; color: #FFFFFF; font-weight: 700; word-break: keep-all; }
+    .metric-unit { font-size: 1rem; color: #DDA853; margin-left: 4px; }
+    
+    .main-title {
+        background: linear-gradient(90deg, #FFFFFF 0%, #A5B4FC 100%);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        font-weight: 800; font-size: 3rem; margin-bottom: 0.5rem;
+    }
     .stTabs [data-baseweb="tab-list"] { gap: 24px; border-bottom: 1px solid #2D3446; }
+    .stTabs [data-baseweb="tab"] { height: 50px; color: #94A3B8 !important; font-weight: 600; font-size: 1.1rem; }
+    .stTabs [aria-selected="true"] { color: #DDA853 !important; border-bottom: 3px solid #DDA853 !important; }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 데이터 처리 및 정제 함수
+# 2. 데이터 파이프라인
 # ==========================================
 def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
-    if df.empty: return df
+    if df.empty:
+        df[new_col_name] = 0
+        return df
     col_map = {c.upper(): c for c in df.columns}
     for p_name in possible_names:
-        if p_name.upper() in col_map:
-            actual_col = col_map[p_name.upper()]
-            df[new_col_name] = pd.to_numeric(df[actual_col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
-            return df
+        upper_name = p_name.upper()
+        if upper_name in col_map:
+            actual_col = col_map[upper_name]
+            cleaned_data = df[actual_col].astype(str).str.replace(',', '', regex=False).str.strip()
+            df[new_col_name] = pd.to_numeric(cleaned_data, errors='coerce').fillna(0)
+            if df[new_col_name].sum() > 0:
+                return df
     df[new_col_name] = 0
     return df
 
 def find_actual_col(df, possible_names):
     col_map = {c.upper(): c for c in df.columns}
     for p_name in possible_names:
-        if p_name.upper() in col_map: return col_map[p_name.upper()]
+        if p_name.upper() in col_map:
+            return col_map[p_name.upper()]
     return None
 
 @st.cache_data(ttl=3600)
-def fetch_data():
-    # 농식품부 도축장 실적
+def fetch_mafra_data():
+    url_sido = f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000423_1/1/999"
     url_factory = f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999"
-    df_factory = pd.DataFrame(requests.get(url_factory).json().get('Grid_20161216000000000428_1', {}).get('row', []))
-    df_factory = auto_detect_numeric_col(df_factory, ['THSMON', 'SLAU_AMN', 'AMOUNT'])
     
-    # 행안부 도축업 인프라
-    url_house = f"https://apis.data.go.kr/1741000/slaughterhouses?serviceKey={PORTAL_API_KEY}&type=json&pIndex=1&pSize=1000"
-    df_house = pd.DataFrame(requests.get(url_house).json().get('slaughterhouses', []))
+    df_sido, df_factory = pd.DataFrame(), pd.DataFrame()
     
-    # 퍼지 매칭 병합
-    bpl_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM'])
-    h_col = 'bplNm'
-    
-    if bpl_col and not df_factory.empty and not df_house.empty:
-        house_names = df_house[h_col].tolist()
-        df_factory['join_key'] = df_factory[bpl_col].apply(lambda x: get_close_matches(x, house_names, n=1, cutoff=0.6))
-        df_factory['join_key'] = df_factory['join_key'].apply(lambda x: x[0] if x else "")
-        df_master = pd.merge(df_factory, df_house, left_on='join_key', right_on=h_col, how='inner')
-    else: df_master = pd.DataFrame()
-    return df_factory, df_master
+    try:
+        res1 = requests.get(url_sido, timeout=10).json()
+        df_sido = pd.DataFrame(res1.get('Grid_20161216000000000423_1', {}).get('row', []))
+        df_sido = auto_detect_numeric_col(df_sido, ['THSMON', 'THSMON_ACMTL', 'AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN'])
+    except Exception: pass 
 
-df_factory, df_master = fetch_data()
+    try:
+        res2 = requests.get(url_factory, timeout=10).json()
+        df_factory = pd.DataFrame(res2.get('Grid_20161216000000000428_1', {}).get('row', []))
+        df_factory = auto_detect_numeric_col(df_factory, ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
+        
+        # 🔥 찾아주신 SLAU_PLACE_NM 파이프라인 추가 완료!
+        bpl_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM', 'CMPNY_NM'])
+        if bpl_col:
+            df_factory['join_key'] = df_factory[bpl_col].astype(str).str.replace(" ", "", regex=True)
+        else:
+            df_factory['join_key'] = ""
+    except Exception: pass
+        
+    return df_sido, df_factory
+
+@st.cache_data(ttl=3600)
+def fetch_portal_data():
+    url_house = f"https://apis.data.go.kr/1741000/slaughterhouses?serviceKey={PORTAL_API_KEY}&type=json&pIndex=1&pSize=1000"
+    df_house = pd.DataFrame()
+    try:
+        res = requests.get(url_house, timeout=10).json()
+        if 'slaughterhouses' in res: df_house = pd.DataFrame(res['slaughterhouses'])
+        elif 'row' in res: df_house = pd.DataFrame(res['row'])
+            
+        if not df_house.empty:
+            name_col = find_actual_col(df_house, ['bplNm', 'BPL_NM'])
+            if name_col:
+                df_house['join_key'] = df_house[name_col].astype(str).str.replace(" ", "", regex=True)
+            else: df_house['join_key'] = ""
+    except Exception: pass
+    return df_house
+
+def verify_grade_confirm_mafra(issue_no):
+    url_grade = f"https://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo?serviceKey={MAFRA_API_KEY}&issueNo={issue_no}"
+    try:
+        response = requests.get(url_grade, timeout=5)
+        root = ET.fromstring(response.content)
+        item = root.find('.//item')
+        if item is not None:
+            return {
+                "issueNo": item.findtext('issueNo', default=issue_no),
+                "judgeDt": item.findtext('judgeDt', default='-'),
+                "gradeNm": item.findtext('gradeNm', default='-'),
+                "abattNm": item.findtext('abattNm', default=''), 
+                "weight": item.findtext('weight', default='-'),
+                "inspectResult": item.findtext('inspectResult', default='적합')
+            }
+    except Exception: pass
+    return None
 
 # ==========================================
-# 3. 메인 UI (3단 탭 및 시각화)
+# 3. 데이터 결합 및 사이드바 (글로벌 필터)
+# ==========================================
+df_sido, df_factory = fetch_mafra_data()
+df_house = fetch_portal_data()
+
+df_master = pd.DataFrame()
+if not df_factory.empty and not df_house.empty and 'join_key' in df_factory.columns and 'join_key' in df_house.columns:
+    valid_factory = df_factory[df_factory['join_key'] != ""]
+    df_master = pd.merge(valid_factory, df_house, on='join_key', how='inner')
+
+with st.sidebar:
+    st.markdown("<h2 style='color: #DDA853; font-weight: 800;'>MEATRICS</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748B; font-size: 0.85rem; margin-top:-15px;'>Livestock Data Intelligence</p>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    region_col = find_actual_col(df_sido, ['CTRD_NM', 'SIDO_NM'])
+    if not df_sido.empty and region_col:
+        sido_options = list(df_sido[region_col].dropna().unique())
+        selected_sido = st.multiselect("분석 대상 지역 필터", options=sido_options, default=sido_options)
+    else:
+        selected_sido = []
+        st.warning("API 데이터 로딩 중입니다...")
+    st.markdown("---")
+
+
+# ==========================================
+# 4. 메인 대시보드 렌더링
 # ==========================================
 st.markdown("<div class='main-title'>Livestock Data Intelligence</div>", unsafe_allow_html=True)
-tab1, tab2, tab3 = st.tabs(["📊 도축장 랭킹 분석", "🏛️ 통합 마스터 인벤토리", "🔍 실시간 역추적"])
+st.markdown("<p style='color: #94A3B8; font-size: 1.1rem; margin-bottom: 2rem;'>선택 지역 기반 도축장별 랭킹 및 실시간 융합 플랫폼</p>", unsafe_allow_html=True)
+
+tab1, tab2, tab3 = st.tabs(["📊 지역 내 도축장 랭킹 분석", "🏛️ 필터링된 마스터 인벤토리", "🔍 실시간 이력 역추적 체인"])
 
 with tab1:
-    col1, col2, col3 = st.columns(3)
-    if not df_factory.empty:
-        total = int(df_factory['AMOUNT'].sum())
-        name_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM'])
-        top_factory = df_factory.groupby(name_col)['AMOUNT'].sum().idxmax()
+    if selected_sido and region_col:
+        # 🔥 지역 필터 적용 (시도별 데이터 & 도축장별 데이터 모두 필터링)
+        filtered_sido = df_sido[df_sido[region_col].isin(selected_sido)] if not df_sido.empty else pd.DataFrame()
         
-        with col1: st.markdown(f"<div class='metric-card'>총 도축량<br><h2>{total:,} 두</h2></div>", unsafe_allow_html=True)
-        with col2: st.markdown(f"<div class='metric-card'>전체 도축장 수<br><h2>{len(df_factory)} 곳</h2></div>", unsafe_allow_html=True)
-        with col3: st.markdown(f"<div class='metric-card'>전국 1위 도축장<br><h4>{top_factory}</h4></div>", unsafe_allow_html=True)
+        factory_region_col = find_actual_col(df_factory, ['CTRD_NM', 'SIDO_NM'])
+        filtered_factory = pd.DataFrame()
+        if not df_factory.empty and factory_region_col:
+            filtered_factory = df_factory[df_factory[factory_region_col].isin(selected_sido)]
         
-        chart_data = df_factory.groupby(name_col, as_index=False)['AMOUNT'].sum().sort_values('AMOUNT', ascending=False).head(15)
-        fig = px.bar(chart_data, x='AMOUNT', y=name_col, orientation='h', template='plotly_dark', color_discrete_sequence=['#DDA853'])
-        st.plotly_chart(fig, use_container_width=True)
+        total_slaughter = filtered_factory['AMOUNT'].sum() if not filtered_factory.empty else 0
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f"<div class='metric-card'><div class='metric-title'>선택 지역 도축 총량</div><div class='metric-value'>{int(total_slaughter):,}<span class='metric-unit'>두</span></div></div>", unsafe_allow_html=True)
+        with col2:
+            factory_count = filtered_factory['join_key'].nunique() if not filtered_factory.empty else 0
+            st.markdown(f"<div class='metric-card'><div class='metric-title'>해당 지역 가동 도축장 수</div><div class='metric-value'>{factory_count}<span class='metric-unit'>곳</span></div></div>", unsafe_allow_html=True)
+        with col3:
+            # 🔥 해당 지역 내에서 1위 도축장 계산
+            factory_name_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM', 'FCLTY_NM'])
+            if not filtered_factory.empty and factory_name_col and total_slaughter > 0:
+                top_factory = filtered_factory.groupby(factory_name_col)['AMOUNT'].sum().idxmax()
+            else:
+                top_factory = "실적 없음"
+            st.markdown(f"<div class='metric-card'><div class='metric-title'>해당 지역 1위 도축장</div><div class='metric-value' style='color:#F43F5E; font-size:1.6rem;'>{top_factory}</div></div>", unsafe_allow_html=True)
+            
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("#### 🏆 선택 지역 내 도축장별 실적 순위 (Top 15)")
+            if not filtered_factory.empty and factory_name_col and total_slaughter > 0:
+                # 🔥 차트 변경: 지역 비교가 아닌 '도축장 순위' 바 차트
+                factory_chart_data = filtered_factory.groupby(factory_name_col, as_index=False)['AMOUNT'].sum().sort_values(by='AMOUNT', ascending=False).head(15)
+                fig_factory = px.bar(factory_chart_data, x='AMOUNT', y=factory_name_col, orientation='h', color='AMOUNT', color_continuous_scale='Blues', template='plotly_dark')
+                fig_factory.update_layout(yaxis={'categoryorder':'total ascending'}, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig_factory, use_container_width=True)
+            else:
+                st.info("시각화할 도축장 실적 데이터가 부족합니다.")
+                
+        with c2:
+            st.markdown("#### 🐖 선택 지역 내 축종별 도축 비율")
+            species_col = find_actual_col(filtered_factory, ['LVSTCKSPC_NM', 'LSTK_KND_NM'])
+            if not filtered_factory.empty and species_col and total_slaughter > 0:
+                premium_colors = ['#DDA853', '#F43F5E', '#3B82F6', '#10B981', '#8B5CF6']
+                fig_kind = px.pie(filtered_factory, names=species_col, values='AMOUNT', hole=0.4, template='plotly_dark', color_discrete_sequence=premium_colors)
+                fig_kind.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig_kind, use_container_width=True)
+            else:
+                st.info("시각화할 축종 데이터가 부족합니다.")
+    else:
+        st.info("데이터가 없습니다. 사이드바에서 지역을 선택해주세요.")
 
 with tab2:
-    st.subheader("부처 간 융합 데이터 결과")
-    if not df_master.empty: st.dataframe(df_master, use_container_width=True)
-    else: st.warning("데이터 병합 대기 중입니다.")
+    st.markdown("### 🏛️ 부처간 데이터 융합 마스터 인벤토리 (필터 연동)")
+    if not df_master.empty:
+        # 🔥 마스터 인벤토리도 사이드바 필터(selected_sido)에 맞게 연동 필터링
+        master_region_col = find_actual_col(df_master, ['CTRD_NM', 'SIDO_NM'])
+        if master_region_col and selected_sido:
+            filtered_master = df_master[df_master[master_region_col].isin(selected_sido)]
+        else:
+            filtered_master = df_master
+            
+        df_display = filtered_master.sort_values(by='AMOUNT', ascending=False)
+        
+        st.success(f"✅ 선택하신 지역의 농식품부 도축장 실적 데이터와 행안부 인허가 데이터 병합 결과입니다. (총 {len(df_display)}건)")
+        st.dataframe(df_display, use_container_width=True)
+    else:
+        st.warning("데이터 병합 대기 중입니다. (행안부/농식품부 양쪽에서 모두 데이터가 들어와야 표출됩니다)")
 
 with tab3:
-    st.subheader("실시간 등급판정확인서 역추적")
-    cert = st.text_input("발급번호 입력", key="cert_input")
-    if st.button("역추적 실행"):
-        st.info("데이터 조회 중...")
+    st.markdown("### 🔍 등급서(농식품부) ➔ 도축장 정보(행안부) 역추적")
+    col_input, col_btn = st.columns([3, 1])
+    with col_input:
+        cert_number = st.text_input("축산물등급판정확인서 발급번호 입력", placeholder="예: 001-2026-0625-99")
+    with col_btn:
+        st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
+        search_triggered = st.button("역추적 실행", use_container_width=True)
+        
+    if search_triggered and cert_number:
+        grade_info = verify_grade_confirm_mafra(cert_number)
+        if grade_info:
+            target_abatt = grade_info['abattNm'].replace(" ", "")
+            st.markdown(f"""
+                <div style='background: #1E293B; border-left: 5px solid #DDA853; padding: 25px; border-radius: 12px; margin: 15px 0;'>
+                    <h4 style='color:#DDA853; margin-top:0;'>📜 축산물 품질 정보</h4>
+                    <p><b>판정등급:</b> {grade_info['gradeNm']} | <b>도체중량:</b> {grade_info['weight']} | <b>출신업체:</b> {grade_info['abattNm']}</p>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            if not df_master.empty and target_abatt:
+                trace_result = df_master[df_master['join_key'] == target_abatt]
+                if not trace_result.empty:
+                    addr_col = find_actual_col(trace_result, ['rdnWhlAddr', 'ADDR', 'LOCPLC'])
+                    addr = trace_result[addr_col].values[0] if addr_col else "상세주소 미상"
+                    st.info(f"📍 도축장 행안부 등록 주소: {addr}")
+                else: st.warning("도축장명이 행안부 DB에 매칭되지 않습니다.")
+        else: st.error("API 연결 실패 또는 원장 데이터 없음.")
