@@ -69,7 +69,7 @@ with tab1:
             '도축실적': [286438, 260844, 232670, 222681, 219119, 213442, 162881, 95400, 84200, 43100]
         })
         
-        url = f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/50"
+        url = f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999"
         try:
             res = requests.get(url, timeout=3).json()
             if isinstance(res, dict) and 'Grid_20161216000000000428_1' in res and 'row' in res['Grid_20161216000000000428_1']:
@@ -165,7 +165,7 @@ with tab1:
 
 with tab2:
     # ------------------------------------------
-    # 2번 축평원 등급판정확인서 데이터
+    # 2번 축평원 등급판정확인서 데이터 (태그 다중 검사 로직 적용 완료)
     # ------------------------------------------
     st.markdown('<div class="section-title">🔍 실시간 축산물 등급판정 시스템 검증</div>', unsafe_allow_html=True)
     st.write("소비자 안심 케어를 위한 모듈입니다. 유통 중인 축산물의 이력번호(12자리)를 입력하면 실시간 정품 데이터와 등급을 확인합니다.")
@@ -185,7 +185,16 @@ with tab2:
             issueNo = root.find('.//issueNo').text if root.find('.//issueNo') is not None else '-'
             issueDate = root.find('.//issueDate').text if root.find('.//issueDate') is not None else '-'
             abattNm = root.find('.//abattNm').text if root.find('.//abattNm') is not None else '-'
-            judgeGradeNm = root.find('.//judgeGradeNm').text if root.find('.//judgeGradeNm') is not None else '-'
+            
+            # [오류 해결 단추] 다양한 등급명 태그 구조 분석 매핑
+            if root.find('.//lastGradeNm') is not None:
+                judgeGradeNm = root.find('.//lastGradeNm').text
+            elif root.find('.//gradeNm') is not None:
+                judgeGradeNm = root.find('.//gradeNm').text
+            elif root.find('.//judgeGradeNm') is not None:
+                judgeGradeNm = root.find('.//judgeGradeNm').text
+            else:
+                judgeGradeNm = '-'
             
             st.success("✅ 축산물 이력 검증 성공: 공공데이터 원장과 일치합니다.")
             col_r1, col_r2, col_r3 = st.columns(3)
@@ -197,4 +206,4 @@ with tab2:
             col_r1, col_r2, col_r3 = st.columns(3)
             col_r1.metric("판정 등급", "1+ 등급")
             col_r2.metric("확인서 발급일자", "2026-06-25")
-            col_r3.metric("소속 도축장", "부경양돈농협 축산물공판장")
+            col_r3.metric("소
