@@ -7,10 +7,10 @@ from difflib import get_close_matches
 import re
 
 # ==============================================================================
-# 0. API 인증키 설정
+# 0. API 인증키 설정 (두 개의 키 모두 사용!)
 # ==============================================================================
-PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23"  # 행안부 키
-MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"           # 농식품부 키
+PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23"  # 행정안전부용
+MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"           # 농식품부용
 
 # ==============================================================================
 # 1. UI 및 테마 설정
@@ -20,7 +20,8 @@ st.set_page_config(page_title="MEATRICS | 프리미엄 축산 대시보드", lay
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
-    * { font-family: 'Pretendard', sans-serif !important; }
+    /* 💡 아이콘 깨짐 방지를 위해 * 대신 텍스트 태그에만 폰트 적용 */
+    html, body, p, div, h1, h2, h3, h4, h5, h6, span { font-family: 'Pretendard', sans-serif; }
     .stApp { background-color: #0F1115; color: #E2E8F0; }
     
     .metric-card { background: linear-gradient(135deg, #1E222B 0%, #14171E 100%); border: 1px solid #2D3446; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); margin-bottom: 20px; transition: transform 0.3s ease; }
@@ -37,39 +38,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. 강력한 공공데이터 만능 파서 (JSON / XML 모두 강제 추출)
+# 2. 고도화된 데이터 정제 엔진
 # ==============================================================================
-def fetch_api_data(url):
-    """정부 서버가 JSON을 주든 XML을 주든 상관없이 데이터를 무조건 찾아냅니다."""
-    try:
-        res = requests.get(url, timeout=10)
-        
-        # 1차 시도: JSON 파싱
-        try:
-            data = res.json()
-            # 농식품부 스타일 파싱
-            for k in data.keys():
-                if 'Grid_' in k and 'row' in data[k]: return data[k]['row']
-            # 행안부 스타일 파싱
-            if 'slaughterhouses' in data: return data['slaughterhouses']
-            if 'response' in data and 'body' in data['response'] and 'items' in data['response']['body']:
-                items = data['response']['body']['items']
-                if 'item' in items: return items['item']
-                return items
-            if 'row' in data: return data['row']
-        except: pass
-        
-        # 2차 시도: XML 파싱 (JSON 실패 시 또는 인증키 오류 등)
-        try:
-            root = ET.fromstring(res.content)
-            items = []
-            for item in root.findall('.//item') + root.findall('.//row'):
-                items.append({child.tag: child.text for child in item})
-            if items: return items
-        except: pass
-    except: pass
-    return []
-
 def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
     if df.empty: return df
     col_map = {c.upper(): c for c in df.columns}
@@ -94,25 +64,45 @@ def normalize_name(name):
 
 @st.cache_data(ttl=3600)
 def fetch_and_merge_data():
-    # 1. 농식품부 시도별 (2번)
-    df_sido = pd.DataFrame(fetch_api_data(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000423_1/1/999"))
-    df_sido = auto_detect_numeric_col(df_sido, ['THSMON', 'THSMON_ACMTL', 'AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN'])
+    df_sido, df_factory, df_house, df_master = pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    portal_error_msg = ""
+    
+    # 1. 농식품부 시도별 실적
+    try:
+        res1 = requests.get(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000423_1/1/999", timeout=10)
+        df_sido = pd.DataFrame(res1.json().get('Grid_20161216000000000423_1', {}).get('row', []))
+        df_sido = auto_detect_numeric_col(df_sido, ['THSMON', 'THSMON_ACMTL', 'AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN'])
+    except: pass
 
-    # 2. 농식품부 도축장별 (3번)
-    df_factory = pd.DataFrame(fetch_api_data(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999"))
-    df_factory = auto_detect_numeric_col(df_factory, ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
-    bpl_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM'])
-    if bpl_col and not df_factory.empty:
-        df_factory['join_key'] = df_factory[bpl_col].apply(normalize_name)
+    # 2. 농식품부 도축장별 실적
+    try:
+        res2 = requests.get(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999", timeout=10)
+        df_factory = pd.DataFrame(res2.json().get('Grid_20161216000000000428_1', {}).get('row', []))
+        df_factory = auto_detect_numeric_col(df_factory, ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
+        bpl_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM'])
+        if bpl_col and not df_factory.empty:
+            df_factory['join_key'] = df_factory[bpl_col].apply(normalize_name)
+    except: pass
 
-    # 3. 행안부 인프라 (4번)
-    df_house = pd.DataFrame(fetch_api_data(f"https://apis.data.go.kr/1741000/slaughterhouses?serviceKey={PORTAL_API_KEY}&type=json&pIndex=1&pSize=1000"))
-    if not df_house.empty:
-        name_col = find_actual_col(df_house, ['bplNm', 'BPL_NM'])
-        if name_col: df_house['join_key'] = df_house[name_col].apply(normalize_name)
+    # 3. 행안부 도축업 인프라 (💡 에러 메시지 캡처 기능 추가)
+    try:
+        res3 = requests.get(f"https://apis.data.go.kr/1741000/slaughterhouses?serviceKey={PORTAL_API_KEY}&type=json&pIndex=1&pSize=1000", timeout=10)
+        portal_error_msg = res3.text[:500] # 만약 실패할 경우 원본 텍스트를 저장해둡니다.
+        data = res3.json()
+        
+        if 'response' in data and 'body' in data['response'] and 'items' in data['response']['body']:
+            items = data['response']['body']['items']
+            df_house = pd.DataFrame(items.get('item', items)) if isinstance(items, dict) else pd.DataFrame(items)
+        elif 'slaughterhouses' in data: df_house = pd.DataFrame(data['slaughterhouses'])
+        elif 'row' in data: df_house = pd.DataFrame(data['row'])
+            
+        if not df_house.empty:
+            name_col = find_actual_col(df_house, ['bplNm', 'BPL_NM'])
+            if name_col: df_house['join_key'] = df_house[name_col].apply(normalize_name)
+    except Exception as e:
+        if not portal_error_msg: portal_error_msg = str(e)
 
     # 4. 퍼지 매칭 병합
-    df_master = pd.DataFrame()
     if not df_factory.empty and not df_house.empty and 'join_key' in df_factory.columns and 'join_key' in df_house.columns:
         valid_factory = df_factory[df_factory['join_key'] != ""]
         house_names = df_house[df_house['join_key'] != ""]['join_key'].tolist()
@@ -122,7 +112,7 @@ def fetch_and_merge_data():
         
         df_master = pd.merge(valid_factory[valid_factory['match_key'] != ""], df_house, left_on='match_key', right_on='join_key', how='inner')
 
-    return df_sido, df_factory, df_house, df_master
+    return df_sido, df_factory, df_house, df_master, portal_error_msg
 
 def verify_grade_confirm(issue_no):
     url_grade = f"https://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo?serviceKey={MAFRA_API_KEY}&issueNo={issue_no}"
@@ -139,7 +129,6 @@ def verify_grade_confirm(issue_no):
                 }}
             else:
                 return {"success": False, "msg": "조회된 데이터가 없습니다. 발급번호를 확인해주세요.", "raw": response.text[:300]}
-        # 상태코드 500 에러 처리 추가
         elif response.status_code == 500:
             return {"success": False, "msg": "정부(축산물품질평가원) 서버 장애입니다 (상태코드 500). 잠시 후 다시 시도해주세요.", "raw": ""}
         else:
@@ -150,7 +139,7 @@ def verify_grade_confirm(issue_no):
 # ==============================================================================
 # 3. 글로벌 사이드바
 # ==============================================================================
-df_sido, df_factory, df_house, df_master = fetch_and_merge_data()
+df_sido, df_factory, df_house, df_master, portal_error = fetch_and_merge_data()
 
 with st.sidebar:
     st.markdown("<h2 style='color: #DDA853; font-weight: 800;'>MEATRICS</h2>", unsafe_allow_html=True)
@@ -161,8 +150,14 @@ with st.sidebar:
     st.write(f"{'✅' if not df_sido.empty else '❌'} 농식품부 (지역 실적)")
     st.write(f"{'✅' if not df_factory.empty else '❌'} 농식품부 (도축장 실적)")
     st.write(f"{'✅' if not df_house.empty else '❌'} 행정안전부 (도축 인프라)")
-    st.markdown("---")
     
+    # 💡 행안부 데이터가 안 들어올 경우 사이드바에 에러 메시지를 표시합니다!
+    if df_house.empty:
+        with st.expander("⚠️ 행안부 연결 실패 원인 (클릭)"):
+            st.write("아래 메시지가 `SERVICE_KEY_IS_NOT_REGISTERED`라면 키 인코딩/디코딩 문제이거나 서비스 신청이 안 된 것입니다.")
+            st.code(portal_error)
+            
+    st.markdown("---")
     region_col = find_actual_col(df_sido, ['CTRD_NM', 'SIDO_NM'])
     if not df_sido.empty and region_col:
         sido_options = list(df_sido[region_col].dropna().unique())
@@ -221,10 +216,7 @@ with tab2:
         st.success(f"✅ 농식품부(실적)와 행안부(주소)가 성공적으로 병합되었습니다. (해당 지역 {len(filtered_master)}건)")
         st.dataframe(filtered_master.sort_values(by='AMOUNT', ascending=False), use_container_width=True)
     else:
-        st.warning("데이터 병합 대기 중이거나 실패했습니다. 사이드바의 연결 상태를 확인하세요.")
-        with st.expander("데이터 디버그 확인용"):
-            st.write(f"가져온 농식품부 데이터: {len(df_factory)}건 / 행정안전부 데이터: {len(df_house)}건")
-            if not df_house.empty: st.dataframe(df_house.head(3))
+        st.warning("데이터 병합 대기 중이거나 실패했습니다. 왼쪽 사이드바의 [행안부 연결 실패 원인]을 확인하세요.")
 
 with tab3:
     st.markdown("### 🔍 등급서(농식품부) ➔ 도축장 정보(행안부) 역추적")
