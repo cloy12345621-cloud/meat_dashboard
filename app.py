@@ -7,33 +7,26 @@ import re
 import urllib.parse
 
 # ==============================================================================
-# 0. API 인증키 설정 (두 개의 키를 명확히 구분하여 입력합니다)
+# 0. API 인증키 설정
 # ==============================================================================
-# 💡 농식품부 개방포털(211.237.50.150)에서 발급받은 키를 넣어주세요.
-MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"
-
-# 💡 공공데이터포털(data.go.kr)에서 발급받은 '운영계정 일반인증키(디코딩)'를 넣어주세요.
-PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23"
+MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"           # 211.237.50.150 용 (1, 2번 탭)
+PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23"  # data.go.kr 용 (3번 탭) 디코딩 키
 
 # ==============================================================================
-# 1. UI 및 테마 설정 (폰트 겹침 및 화살표 깨짐 버그 완벽 해결)
+# 1. UI 및 테마 설정
 # ==============================================================================
 st.set_page_config(page_title="MEATRICS | 프리미엄 축산 대시보드", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
-    
-    /* 💡 에러 방지: Streamlit 고유 아이콘 font-family를 해치지 않도록 특정 태그에만 폰트 적용 */
     html, body, p, h1, h2, h3, h4, h5, h6, li, td, th, div.stMarkdown, span { font-family: 'Pretendard', sans-serif !important; }
-    
     .stApp { background-color: #0F1115; color: #E2E8F0; }
     .metric-card { background: linear-gradient(135deg, #1E222B 0%, #14171E 100%); border: 1px solid #2D3446; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); margin-bottom: 20px; transition: transform 0.3s ease; }
     .metric-card:hover { border-color: #DDA853; transform: translateY(-2px); }
     .metric-title { font-size: 0.9rem; color: #94A3B8; font-weight: 600; text-transform: uppercase; margin-bottom: 8px; }
     .metric-value { font-size: 2rem; color: #FFFFFF; font-weight: 700; word-break: keep-all; }
     .metric-unit { font-size: 1rem; color: #DDA853; margin-left: 4px; }
-    
     .main-title { background: linear-gradient(90deg, #FFFFFF 0%, #A5B4FC 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; font-size: 3rem; margin-bottom: 0.5rem; }
     .stTabs [data-baseweb="tab-list"] { gap: 24px; border-bottom: 1px solid #2D3446; }
     .stTabs [data-baseweb="tab"] { height: 50px; color: #94A3B8 !important; font-weight: 600; font-size: 1.1rem; }
@@ -42,10 +35,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. 강력한 공공데이터 통신 & 정제 엔진
+# 2. 데이터 정제 엔진
 # ==============================================================================
 def get_safe_key(key):
-    """인증키가 이중 인코딩되는 현상을 방지하기 위해 원래대로 unquote 처리합니다."""
     return urllib.parse.unquote(key)
 
 def fetch_api_data(url, params=None):
@@ -89,19 +81,16 @@ def load_all_mafra_data():
 
     raw_factory = fetch_api_data(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999")
     df_factory = auto_detect_numeric_col(pd.DataFrame(raw_factory), ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
-    
     return df_sido, df_factory
 
 def search_livestock_trace_info(search_no):
-    """
-    [요청사항 완벽 반영] 사용자님이 주신 이력번호/발급번호를 기반으로
-    정부 공공데이터포털 서버를 역추적하여 기업정보(도축장), 일자, 등급 데이터를 추출합니다.
-    """
+    """💡 각 API가 실패할 경우 그 원문(로그)을 모아서 UI로 전달합니다."""
     safe_key = get_safe_key(PORTAL_API_KEY)
     result_data = {}
+    debug_logs = []
     
-    # 1. 축산물등급판정확인서 원장 조회 API
-    url_grade = "https://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo"
+    # 1. 축산물등급판정확인서 (API 3)
+    url_grade = "http://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo"
     try:
         res_grade = requests.get(url_grade, params={"serviceKey": safe_key, "issueNo": search_no}, timeout=10)
         if res_grade.status_code == 200:
@@ -116,9 +105,14 @@ def search_livestock_trace_info(search_no):
                     "도체중량": item.findtext('weight', default='-'),
                     "합격여부": item.findtext('inspectResult', default='적합')
                 }
-    except: pass
+            else:
+                debug_logs.append(f"[등급판정 API 거부/데이터없음] {res_grade.text[:200]}")
+        else:
+            debug_logs.append(f"[등급판정 API 통신에러 {res_grade.status_code}] {res_grade.text[:200]}")
+    except Exception as e:
+        debug_logs.append(f"[등급판정 API 시스템에러] {str(e)}")
 
-    # 2. 축산물통합이력정보제공 서비스 API (새로 요청하신 축평원 데이터)
+    # 2. 축산물통합이력정보 (API 4)
     url_history = "http://apis.data.go.kr/B552895/MacarnisTraceDetailService/getTraceNoSearch"
     try:
         res_hist = requests.get(url_history, params={"serviceKey": safe_key, "traceNo": search_no}, timeout=10)
@@ -134,9 +128,14 @@ def search_livestock_trace_info(search_no):
                     "농장명(기업)": item.findtext('farmNm', default='-'),
                     "사육지주소": item.findtext('farmAddr', default='-')
                 }
-    except: pass
+            else:
+                debug_logs.append(f"[통합이력 API 거부/데이터없음] {res_hist.text[:200]}")
+        else:
+            debug_logs.append(f"[통합이력 API 통신에러 {res_hist.status_code}] {res_hist.text[:200]}")
+    except Exception as e:
+        debug_logs.append(f"[통합이력 API 시스템에러] {str(e)}")
 
-    return result_data
+    return result_data, debug_logs
 
 # ==============================================================================
 # 3. 글로벌 사이드바
@@ -162,15 +161,13 @@ with st.sidebar:
         st.warning("데이터 로딩 중...")
 
 # ==============================================================================
-# 4. 메인 대시보드 (3단 탭 완벽 구동)
+# 4. 메인 대시보드
 # ==============================================================================
 st.markdown("<div class='main-title'>Livestock Data Intelligence</div>", unsafe_allow_html=True)
 st.markdown("<p style='color: #94A3B8; font-size: 1.1rem; margin-bottom: 2rem;'>선택 지역 기반 실적 분석 및 실시간 품질 역추적 플랫폼</p>", unsafe_allow_html=True)
 
-# 💡 st.tabs 에러 방지 완료
 tab1, tab2, tab3 = st.tabs(["📊 지역 내 도축장 랭킹 분석", "🏛️ 농식품부 공인 마스터 DB", "🔍 실시간 이력 & 기업 정보 역추적"])
 
-# ----------------- TAB 1: 랭킹 및 통계 -----------------
 with tab1:
     if selected_sido and region_col:
         factory_region_col = find_actual_col(df_factory, ['CTRD_NM', 'SIDO_NM'])
@@ -205,7 +202,6 @@ with tab1:
                 st.plotly_chart(fig_kind, use_container_width=True)
     else: st.info("사이드바에서 분석 대상 지역을 선택해주세요.")
 
-# ----------------- TAB 2: 마스터 인벤토리 -----------------
 with tab2:
     st.markdown("### 🏛️ 전국 도축장 마스터 DB (농림축산식품부 공인)")
     if not df_factory.empty:
@@ -213,35 +209,28 @@ with tab2:
         filtered_db = df_factory[df_factory[factory_region_col].isin(selected_sido)] if (factory_region_col and selected_sido) else df_factory
         st.success(f"✅ 농식품부 원장 데이터 정제 완료 (총 {len(filtered_db)}개 시설 데이터 표출)")
         st.dataframe(filtered_db.sort_values(by='AMOUNT', ascending=False), use_container_width=True)
-    else:
-        st.warning("데이터 실적을 수신하지 못했습니다.")
 
-# ----------------- TAB 3: 실시간 역추적 -----------------
 with tab3:
     st.markdown("### 🔍 이력번호 / 발급번호 기반 실시간 데이터 추적 시스템")
-    st.markdown("축산물등급판정확인서 및 통합이력정보 조회를 통해 해당 상품의 기업 정보와 품질 이력을 실시간 검증합니다.")
     
     col_input, col_btn = st.columns([3, 1])
     with col_input:
-        search_no = st.text_input("조회할 이력번호(12자리) 또는 등급판정 발급번호 입력", placeholder="예시: 002129200127 (한우이력) 또는 160053500176 (발급번호)")
+        search_no = st.text_input("조회할 이력번호(12자리) 또는 등급판정 발급번호 입력", placeholder="예시: 002129200127 또는 160053500176")
     with col_btn:
         st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
         search_triggered = st.button("실시간 역추적 실행", use_container_width=True)
         
     if search_triggered and search_no:
-        # 하이픈이나 기호는 자동으로 제거해주는 전처리 방어막
         clean_number = re.sub(r'[^0-9a-zA-Z]', '', search_no)
         
-        with st.spinner("정부 공공데이터 원장으로부터 실시간 정보를 긁어오는 중..."):
-            info = search_livestock_trace_info(clean_number)
+        with st.spinner("정부 서버(등급판정, 통합이력)를 조회 중입니다..."):
+            info, debug_logs = search_livestock_trace_info(clean_number)
             
         if info:
             c3, c4 = st.columns(2)
-            
-            # 1. 등급판정 데이터 카드 출력
             if 'grade' in info:
                 with c3:
-                    st.markdown("#### 📜 등급판정확인 원장 정보 (API 3)")
+                    st.markdown("#### 📜 등급판정확인 원장 (API 3)")
                     g = info['grade']
                     st.markdown(f"""
                         <div class='metric-card' style='border-left: 5px solid #DDA853;'>
@@ -249,15 +238,12 @@ with tab3:
                             <p style='margin:4px 0;'><b>📅 도축 판정일자:</b> {g['판정일자']}</p>
                             <p style='margin:4px 0;'><b>🏆 최종 판정등급:</b> <span style='color:#F43F5E; font-weight:bold; font-size:1.2rem;'>{g['판정등급']}</span></p>
                             <p style='margin:4px 0;'><b>⚖️ 도체 중량:</b> {g['도체중량']} kg</p>
-                            <p style='margin:4px 0;'><b>✅ 위생 검사 결과:</b> {g['합격여부']}</p>
-                            <p style='margin:4px 0; font-size:0.8rem; color:#64748B;'>발급원장번호: {g['발급번호']}</p>
+                            <p style='margin:4px 0;'><b>✅ 위생 검사:</b> {g['합격여부']}</p>
                         </div>
                     """, unsafe_allow_html=True)
-            
-            # 2. 통합이력 데이터 카드 출력
             if 'history' in info:
                 with c4:
-                    st.markdown("#### 🧬 축산물 통합 이력 정보 (API 4)")
+                    st.markdown("#### 🧬 통합 이력 정보 (API 4)")
                     h = info['history']
                     st.markdown(f"""
                         <div class='metric-card' style='border-left: 5px solid #3B82F6;'>
@@ -265,12 +251,13 @@ with tab3:
                             <p style='margin:4px 0;'><b>🐖 축종 및 품종:</b> {h['축종/품종']}</p>
                             <p style='margin:4px 0;'><b>⚥ 개체 성별:</b> {h['성별']}</p>
                             <p style='margin:4px 0;'><b>🎂 개체 출생일자:</b> {h['출생일자']}</p>
-                            <p style='margin:4px 0;'><b>📍 농장 소재지 (사육지):</b> {h['사육지주소']}</p>
-                            <p style='margin:4px 0; font-size:0.8rem; color:#64748B;'>개체이력번호: {h['이력번호']}</p>
+                            <p style='margin:4px 0;'><b>📍 사육지 주소:</b> {h['사육지주소']}</p>
                         </div>
                     """, unsafe_allow_html=True)
-            
-            if 'grade' not in info and 'history' not in info:
-                st.error("❌ 조회된 데이터가 없습니다. 번호가 잘못되었거나 운영계정 키 동기화 전일 수 있습니다.")
         else:
-            st.error("❌ 데이터 요청 실패. API 키 권한이나 네트워크 상태를 확인하세요.")
+            # 💡 에러 발생 시 그 이유를 펼쳐볼 수 있게 제공합니다!
+            st.error("❌ 조회 실패. 정부 서버 통신 오류이거나 등록되지 않은 번호입니다. 아래 디버그 창을 확인하세요.")
+            with st.expander("🛠️ 정부 서버 응답 원본 보기 (에러 원인 파악)"):
+                st.write("공공데이터포털(data.go.kr)이 아래와 같은 에러를 반환했습니다:")
+                for log in debug_logs:
+                    st.code(log)
