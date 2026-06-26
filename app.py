@@ -4,29 +4,34 @@ import plotly.express as px
 import requests
 import xml.etree.ElementTree as ET
 import re
-import urllib.parse
 
 # ==============================================================================
 # 0. API 인증키 설정
 # ==============================================================================
-MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"           # 211.237.50.150 용 (1, 2번 탭)
-PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23"  # data.go.kr 용 (3번 탭) 디코딩 키
+MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"           # 211.237... (1, 2번 탭)
+
+# 💡 중요: 이제 파이썬이 키를 변환하지 않으므로, % 기호가 포함된 '일반 인증키(Encoding)'를 넣으셔도 됩니다!
+PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23"  # data.go.kr (3번 탭)
 
 # ==============================================================================
-# 1. UI 및 테마 설정
+# 1. UI 및 테마 설정 (아이콘 깨짐 100% 차단)
 # ==============================================================================
 st.set_page_config(page_title="MEATRICS | 프리미엄 축산 대시보드", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
-    html, body, p, h1, h2, h3, h4, h5, h6, li, td, th, div.stMarkdown, span { font-family: 'Pretendard', sans-serif !important; }
+    
+    /* 💡 _arrow_down 깨짐 완벽 방지: span 태그를 제외하고 텍스트에만 폰트 적용 */
+    p, h1, h2, h3, h4, h5, h6, li, td, th, label { font-family: 'Pretendard', sans-serif !important; }
+    
     .stApp { background-color: #0F1115; color: #E2E8F0; }
     .metric-card { background: linear-gradient(135deg, #1E222B 0%, #14171E 100%); border: 1px solid #2D3446; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); margin-bottom: 20px; transition: transform 0.3s ease; }
     .metric-card:hover { border-color: #DDA853; transform: translateY(-2px); }
     .metric-title { font-size: 0.9rem; color: #94A3B8; font-weight: 600; text-transform: uppercase; margin-bottom: 8px; }
     .metric-value { font-size: 2rem; color: #FFFFFF; font-weight: 700; word-break: keep-all; }
     .metric-unit { font-size: 1rem; color: #DDA853; margin-left: 4px; }
+    
     .main-title { background: linear-gradient(90deg, #FFFFFF 0%, #A5B4FC 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 800; font-size: 3rem; margin-bottom: 0.5rem; }
     .stTabs [data-baseweb="tab-list"] { gap: 24px; border-bottom: 1px solid #2D3446; }
     .stTabs [data-baseweb="tab"] { height: 50px; color: #94A3B8 !important; font-weight: 600; font-size: 1.1rem; }
@@ -35,14 +40,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. 데이터 정제 엔진
+# 2. 강력한 공공데이터 통신 & 정제 엔진
 # ==============================================================================
-def get_safe_key(key):
-    return urllib.parse.unquote(key)
-
-def fetch_api_data(url, params=None):
+def fetch_api_data(url):
     try:
-        res = requests.get(url, params=params, timeout=15)
+        res = requests.get(url, timeout=15)
         try:
             data = res.json()
             for k in data.keys():
@@ -81,18 +83,17 @@ def load_all_mafra_data():
 
     raw_factory = fetch_api_data(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999")
     df_factory = auto_detect_numeric_col(pd.DataFrame(raw_factory), ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
+    
     return df_sido, df_factory
 
 def search_livestock_trace_info(search_no):
-    """💡 각 API가 실패할 경우 그 원문(로그)을 모아서 UI로 전달합니다."""
-    safe_key = get_safe_key(PORTAL_API_KEY)
     result_data = {}
     debug_logs = []
     
-    # 1. 축산물등급판정확인서 (API 3)
-    url_grade = "http://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo"
+    # 💡 핵심 수정: 파이썬의 간섭을 막기 위해 날것 그대로의(Raw) URL 문자열을 직접 조립합니다.
+    url_grade = f"https://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo?serviceKey={PORTAL_API_KEY}&issueNo={search_no}"
     try:
-        res_grade = requests.get(url_grade, params={"serviceKey": safe_key, "issueNo": search_no}, timeout=10)
+        res_grade = requests.get(url_grade, timeout=10) # params 삭제!
         if res_grade.status_code == 200:
             root = ET.fromstring(res_grade.content)
             item = root.find('.//item')
@@ -106,16 +107,15 @@ def search_livestock_trace_info(search_no):
                     "합격여부": item.findtext('inspectResult', default='적합')
                 }
             else:
-                debug_logs.append(f"[등급판정 API 거부/데이터없음] {res_grade.text[:200]}")
+                debug_logs.append(f"[등급판정] 데이터 없음 원문:\n{res_grade.text[:200]}")
         else:
-            debug_logs.append(f"[등급판정 API 통신에러 {res_grade.status_code}] {res_grade.text[:200]}")
+            debug_logs.append(f"[등급판정 통신에러 {res_grade.status_code}] 원문:\n{res_grade.text[:200]}")
     except Exception as e:
-        debug_logs.append(f"[등급판정 API 시스템에러] {str(e)}")
+        debug_logs.append(f"[등급판정 시스템에러] {str(e)}")
 
-    # 2. 축산물통합이력정보 (API 4)
-    url_history = "http://apis.data.go.kr/B552895/MacarnisTraceDetailService/getTraceNoSearch"
+    url_history = f"https://apis.data.go.kr/B552895/MacarnisTraceDetailService/getTraceNoSearch?serviceKey={PORTAL_API_KEY}&traceNo={search_no}"
     try:
-        res_hist = requests.get(url_history, params={"serviceKey": safe_key, "traceNo": search_no}, timeout=10)
+        res_hist = requests.get(url_history, timeout=10) # params 삭제!
         if res_hist.status_code == 200:
             root = ET.fromstring(res_hist.content)
             item = root.find('.//item')
@@ -129,11 +129,11 @@ def search_livestock_trace_info(search_no):
                     "사육지주소": item.findtext('farmAddr', default='-')
                 }
             else:
-                debug_logs.append(f"[통합이력 API 거부/데이터없음] {res_hist.text[:200]}")
+                debug_logs.append(f"[통합이력] 데이터 없음 원문:\n{res_hist.text[:200]}")
         else:
-            debug_logs.append(f"[통합이력 API 통신에러 {res_hist.status_code}] {res_hist.text[:200]}")
+            debug_logs.append(f"[통합이력 통신에러 {res_hist.status_code}] 원문:\n{res_hist.text[:200]}")
     except Exception as e:
-        debug_logs.append(f"[통합이력 API 시스템에러] {str(e)}")
+        debug_logs.append(f"[통합이력 시스템에러] {str(e)}")
 
     return result_data, debug_logs
 
@@ -255,9 +255,8 @@ with tab3:
                         </div>
                     """, unsafe_allow_html=True)
         else:
-            # 💡 에러 발생 시 그 이유를 펼쳐볼 수 있게 제공합니다!
             st.error("❌ 조회 실패. 정부 서버 통신 오류이거나 등록되지 않은 번호입니다. 아래 디버그 창을 확인하세요.")
-            with st.expander("🛠️ 정부 서버 응답 원본 보기 (에러 원인 파악)"):
-                st.write("공공데이터포털(data.go.kr)이 아래와 같은 에러를 반환했습니다:")
+            with st.expander("정부 서버 응답 원본 보기 (에러 원인 파악)"):
+                st.write("공공데이터포털이 아래와 같은 에러를 반환했습니다:")
                 for log in debug_logs:
                     st.code(log)
