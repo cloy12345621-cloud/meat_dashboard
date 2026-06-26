@@ -5,24 +5,28 @@ import requests
 import xml.etree.ElementTree as ET
 from difflib import get_close_matches
 import re
+import urllib.parse
 
 # ==============================================================================
 # 0. API 인증키 설정
 # ==============================================================================
-PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23"  # 행안부 키
-MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"           # 농식품부 키
+# 💡 본인이 발급받은 키를 그대로 넣으시면 파이썬이 알아서 최적화합니다.
+PORTAL_API_KEY = "f0c7c3349d71c4359761cd1d223198091f1e486eaeef0324e1f36c5cb0274e23"  # 행안부 (data.go.kr) 키
+MAFRA_API_KEY = "fd487f73ec35ea535a3576023f80e8c388c468cd8c69d8f0221ba152c7f6d677"           # 농식품부 (211.237.50.150) 키
 
 # ==============================================================================
-# 1. UI 및 테마 설정
+# 1. UI 및 테마 설정 (폰트 충돌 버그 해결!)
 # ==============================================================================
 st.set_page_config(page_title="MEATRICS | 프리미엄 축산 대시보드", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
-    * { font-family: 'Pretendard', sans-serif !important; }
-    .stApp { background-color: #0F1115; color: #E2E8F0; }
     
+    /* 💡 _arrow_right 아이콘 깨짐 방지: * 대신 일반 텍스트 컨테이너에만 폰트 적용 */
+    html, body, p, h1, h2, h3, h4, h5, h6, li, td, th { font-family: 'Pretendard', sans-serif !important; }
+    
+    .stApp { background-color: #0F1115; color: #E2E8F0; }
     .metric-card { background: linear-gradient(135deg, #1E222B 0%, #14171E 100%); border: 1px solid #2D3446; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); margin-bottom: 20px; transition: transform 0.3s ease; }
     .metric-card:hover { border-color: #DDA853; transform: translateY(-2px); }
     .metric-title { font-size: 0.9rem; color: #94A3B8; font-weight: 600; text-transform: uppercase; margin-bottom: 8px; }
@@ -37,38 +41,38 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. 강력한 공공데이터 만능 파서 (JSON / XML 모두 강제 추출)
+# 2. 강력한 공공데이터 통신 & 정제 엔진
 # ==============================================================================
-def fetch_api_data(url):
-    """정부 서버가 JSON을 주든 XML을 주든 상관없이 데이터를 무조건 찾아냅니다."""
+def get_safe_key(key):
+    """키가 이미 인코딩되어 있다면(% 기호 등) 원래대로 풀어서 requests에 넘겨 이중 인코딩을 방지합니다."""
+    return urllib.parse.unquote(key)
+
+def fetch_api_data(url, params=None):
+    """JSON과 XML을 모두 파싱하며, 에러 발생 시 원문을 반환하는 통합 수집기"""
     try:
-        res = requests.get(url, timeout=10)
-        
-        # 1차 시도: JSON 파싱
+        res = requests.get(url, params=params, timeout=15)
+        # 1. JSON 시도
         try:
             data = res.json()
-            # 농식품부 스타일 파싱
             for k in data.keys():
-                if 'Grid_' in k and 'row' in data[k]: return data[k]['row']
-            # 행안부 스타일 파싱
-            if 'slaughterhouses' in data: return data['slaughterhouses']
+                if 'Grid_' in k and 'row' in data[k]: return data[k]['row'], ""
+            if 'slaughterhouses' in data: return data['slaughterhouses'], ""
             if 'response' in data and 'body' in data['response'] and 'items' in data['response']['body']:
                 items = data['response']['body']['items']
-                if 'item' in items: return items['item']
-                return items
-            if 'row' in data: return data['row']
+                return (items['item'] if 'item' in items else items), ""
+            if 'row' in data: return data['row'], ""
         except: pass
-        
-        # 2차 시도: XML 파싱 (JSON 실패 시 또는 인증키 오류 등)
+        # 2. XML 시도
         try:
             root = ET.fromstring(res.content)
-            items = []
-            for item in root.findall('.//item') + root.findall('.//row'):
-                items.append({child.tag: child.text for child in item})
-            if items: return items
+            items = [{child.tag: child.text for child in item} for item in root.findall('.//item') + root.findall('.//row')]
+            if items: return items, ""
         except: pass
-    except: pass
-    return []
+        
+        # 데이터가 없으면 서버의 원본 응답 반환 (디버그용)
+        return [], res.text[:500]
+    except Exception as e:
+        return [], str(e)
 
 def auto_detect_numeric_col(df, possible_names, new_col_name='AMOUNT'):
     if df.empty: return df
@@ -94,24 +98,30 @@ def normalize_name(name):
 
 @st.cache_data(ttl=3600)
 def fetch_and_merge_data():
-    # 1. 농식품부 시도별 (2번)
-    df_sido = pd.DataFrame(fetch_api_data(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000423_1/1/999"))
-    df_sido = auto_detect_numeric_col(df_sido, ['THSMON', 'THSMON_ACMTL', 'AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN'])
+    portal_err, mafra_err = "", ""
+    
+    # 1. 농식품부 데이터 (지역, 도축장)
+    raw_sido, _ = fetch_api_data(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000423_1/1/999")
+    df_sido = auto_detect_numeric_col(pd.DataFrame(raw_sido), ['THSMON', 'THSMON_ACMTL', 'AUCO_LSTK_AMN', 'SLAU_AMN', 'MT_AMN'])
 
-    # 2. 농식품부 도축장별 (3번)
-    df_factory = pd.DataFrame(fetch_api_data(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999"))
-    df_factory = auto_detect_numeric_col(df_factory, ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
-    bpl_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM', 'FCLTY_NM', 'ABATT_NM', 'ENTRPS_NM'])
+    raw_factory, _ = fetch_api_data(f"http://211.237.50.150:7080/openapi/{MAFRA_API_KEY}/json/Grid_20161216000000000428_1/1/999")
+    df_factory = auto_detect_numeric_col(pd.DataFrame(raw_factory), ['THSMON', 'THSMON_ACMTL', 'SLAU_AMN', 'AUCO_LSTK_AMN', 'MT_AMN'])
+    bpl_col = find_actual_col(df_factory, ['SLAU_PLACE_NM', 'BPL_NM', 'FCLTY_NM'])
     if bpl_col and not df_factory.empty:
         df_factory['join_key'] = df_factory[bpl_col].apply(normalize_name)
 
-    # 3. 행안부 인프라 (4번)
-    df_house = pd.DataFrame(fetch_api_data(f"https://apis.data.go.kr/1741000/slaughterhouses?serviceKey={PORTAL_API_KEY}&type=json&pIndex=1&pSize=1000"))
+    # 2. 행안부 인프라 (💡 URL 인코딩 에러를 완벽히 막는 params 방식 적용)
+    portal_params = {
+        "serviceKey": get_safe_key(PORTAL_API_KEY),
+        "type": "json", "pIndex": "1", "pSize": "1000"
+    }
+    raw_house, portal_err = fetch_api_data("https://apis.data.go.kr/1741000/slaughterhouses", params=portal_params)
+    df_house = pd.DataFrame(raw_house)
     if not df_house.empty:
         name_col = find_actual_col(df_house, ['bplNm', 'BPL_NM'])
         if name_col: df_house['join_key'] = df_house[name_col].apply(normalize_name)
 
-    # 4. 퍼지 매칭 병합
+    # 3. 퍼지 매칭 병합
     df_master = pd.DataFrame()
     if not df_factory.empty and not df_house.empty and 'join_key' in df_factory.columns and 'join_key' in df_house.columns:
         valid_factory = df_factory[df_factory['join_key'] != ""]
@@ -119,17 +129,21 @@ def fetch_and_merge_data():
         
         valid_factory['match_key'] = valid_factory['join_key'].apply(lambda x: get_close_matches(x, house_names, n=1, cutoff=0.4))
         valid_factory['match_key'] = valid_factory['match_key'].apply(lambda x: x[0] if x else "")
-        
         df_master = pd.merge(valid_factory[valid_factory['match_key'] != ""], df_house, left_on='match_key', right_on='join_key', how='inner')
 
-    return df_sido, df_factory, df_house, df_master
+    return df_sido, df_factory, df_house, df_master, portal_err
 
 def verify_grade_confirm(issue_no):
-    url_grade = f"https://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo?serviceKey={MAFRA_API_KEY}&issueNo={issue_no}"
+    """💡 등급판정확인서 (행안부 포털 API 사용, 안전한 params 통신)"""
+    url = "https://apis.data.go.kr/B552895/EkapeEngineGradeConfirmInfoService/getGradeConfirmInfo"
+    params = {
+        "serviceKey": get_safe_key(PORTAL_API_KEY),
+        "issueNo": issue_no
+    }
     try:
-        response = requests.get(url_grade, timeout=5)
-        if response.status_code == 200:
-            root = ET.fromstring(response.content)
+        res = requests.get(url, params=params, timeout=10)
+        if res.status_code == 200:
+            root = ET.fromstring(res.content)
             item = root.find('.//item')
             if item is not None:
                 return {"success": True, "data": {
@@ -138,44 +152,45 @@ def verify_grade_confirm(issue_no):
                     "weight": item.findtext('weight', default='-'), "inspectResult": item.findtext('inspectResult', default='적합')
                 }}
             else:
-                return {"success": False, "msg": "조회된 데이터가 없습니다. 발급번호를 확인해주세요.", "raw": response.text[:300]}
-        # 상태코드 500 에러 처리 추가
-        elif response.status_code == 500:
-            return {"success": False, "msg": "정부(축산물품질평가원) 서버 장애입니다 (상태코드 500). 잠시 후 다시 시도해주세요.", "raw": ""}
+                return {"success": False, "msg": "조회된 데이터가 없습니다. 발급번호를 다시 확인해주세요.", "raw": res.text[:300]}
         else:
-            return {"success": False, "msg": f"서버 통신 오류 (상태코드: {response.status_code})", "raw": response.text[:300]}
+            return {"success": False, "msg": f"정부 서버 통신 오류 (상태코드: {res.status_code}) - 트래픽 초과 또는 서버 다운", "raw": res.text[:300]}
     except Exception as e:
-        return {"success": False, "msg": f"네트워크 오류: {str(e)}", "raw": ""}
+        return {"success": False, "msg": f"네트워크 통신 에러: {str(e)}", "raw": ""}
 
 # ==============================================================================
 # 3. 글로벌 사이드바
 # ==============================================================================
-df_sido, df_factory, df_house, df_master = fetch_and_merge_data()
+df_sido, df_factory, df_house, df_master, portal_error = fetch_and_merge_data()
 
 with st.sidebar:
     st.markdown("<h2 style='color: #DDA853; font-weight: 800;'>MEATRICS</h2>", unsafe_allow_html=True)
     st.markdown("<p style='color: #64748B; font-size: 0.85rem; margin-top:-15px;'>Livestock Data Intelligence</p>", unsafe_allow_html=True)
     st.markdown("---")
     
-    st.markdown("### 📡 API 서버 연결 상태")
-    st.write(f"{'✅' if not df_sido.empty else '❌'} 농식품부 (지역 실적)")
-    st.write(f"{'✅' if not df_factory.empty else '❌'} 농식품부 (도축장 실적)")
-    st.write(f"{'✅' if not df_house.empty else '❌'} 행정안전부 (도축 인프라)")
-    st.markdown("---")
+    st.markdown("### 📡 서버 연결 상태")
+    st.write(f"{'🟢 정상' if not df_sido.empty else '🔴 대기'} | 농식품부 (지역)")
+    st.write(f"{'🟢 정상' if not df_factory.empty else '🔴 대기'} | 농식품부 (도축장)")
+    st.write(f"{'🟢 정상' if not df_house.empty else '🔴 대기'} | 행정안전부 (인프라)")
     
+    if df_house.empty and portal_error:
+        with st.expander("🛠️ 행안부 에러 로그 보기"):
+            st.code(portal_error)
+            
+    st.markdown("---")
     region_col = find_actual_col(df_sido, ['CTRD_NM', 'SIDO_NM'])
     if not df_sido.empty and region_col:
         sido_options = list(df_sido[region_col].dropna().unique())
-        selected_sido = st.multiselect("분석 대상 지역 필터", options=sido_options, default=sido_options)
+        selected_sido = st.multiselect("분석 대상 지역", options=sido_options, default=sido_options)
     else:
         selected_sido = []
-        st.warning("데이터 통신 대기 중...")
+        st.warning("데이터 수신 대기 중...")
 
 # ==============================================================================
-# 4. 메인 대시보드 렌더링
+# 4. 메인 대시보드
 # ==============================================================================
 st.markdown("<div class='main-title'>Livestock Data Intelligence</div>", unsafe_allow_html=True)
-st.markdown("<p style='color: #94A3B8; font-size: 1.1rem; margin-bottom: 2rem;'>부처 간 공공데이터 융합 대시보드</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #94A3B8; font-size: 1.1rem; margin-bottom: 2rem;'>부처 간 공공데이터 융합 대시보드 (PROD)</p>", unsafe_allow_html=True)
 
 tab1, tab2, tab3 = st.tabs(["📊 지역 내 도축장 랭킹 분석", "🏛️ 필터링된 마스터 인벤토리", "🔍 실시간 이력 역추적 체인"])
 
@@ -218,25 +233,26 @@ with tab2:
     if not df_master.empty:
         master_region_col = find_actual_col(df_master, ['CTRD_NM', 'SIDO_NM'])
         filtered_master = df_master[df_master[master_region_col].isin(selected_sido)] if (master_region_col and selected_sido) else df_master
-        st.success(f"✅ 농식품부(실적)와 행안부(주소)가 성공적으로 병합되었습니다. (해당 지역 {len(filtered_master)}건)")
+        st.success(f"✅ 농식품부(실적)와 행안부(주소)가 완벽히 병합되었습니다. (해당 지역 {len(filtered_master)}건)")
         st.dataframe(filtered_master.sort_values(by='AMOUNT', ascending=False), use_container_width=True)
     else:
-        st.warning("데이터 병합 대기 중이거나 실패했습니다. 사이드바의 연결 상태를 확인하세요.")
-        with st.expander("데이터 디버그 확인용"):
-            st.write(f"가져온 농식품부 데이터: {len(df_factory)}건 / 행정안전부 데이터: {len(df_house)}건")
-            if not df_house.empty: st.dataframe(df_house.head(3))
+        st.warning("데이터 병합을 진행 중이거나, 신규 운영계정 동기화를 기다리고 있습니다.")
+        with st.expander("데이터 수신 현황 상세 확인"):
+            st.write(f"현재 확보된 농식품부 데이터: {len(df_factory)}건 / 행정안전부 데이터: {len(df_house)}건")
+            if not df_house.empty: st.dataframe(df_house.head())
 
 with tab3:
     st.markdown("### 🔍 등급서(농식품부) ➔ 도축장 정보(행안부) 역추적")
     col_input, col_btn = st.columns([3, 1])
     with col_input:
-        cert_number = st.text_input("축산물등급판정확인서 발급번호 입력 (예: 160053500176)", key="cert_input")
+        cert_number = st.text_input("축산물등급판정확인서 발급번호 입력 (하이픈 포함 가능)", key="cert_input")
     with col_btn:
         st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
         search_triggered = st.button("역추적 실행", use_container_width=True)
         
     if search_triggered and cert_number:
-        result = verify_grade_confirm(cert_number)
+        clean_number = re.sub(r'[^0-9a-zA-Z]', '', cert_number)
+        result = verify_grade_confirm(clean_number)
         
         if result.get("success"):
             g_info = result["data"]
@@ -255,8 +271,8 @@ with tab3:
                 if closest_match:
                     trace_result = df_master[df_master['match_key'] == closest_match[0]]
                     addr_col = find_actual_col(trace_result, ['rdnWhlAddr', 'ADDR', 'LOCPLC'])
-                    addr = trace_result[addr_col].values[0] if addr_col else "미상"
-                    st.success(f"📍 행안부 인프라 추적 완료: **{addr}**")
+                    addr = trace_result[addr_col].values[0] if addr_col else "상세주소 미상"
+                    st.success(f"📍 행안부 인프라 주소지 매칭 완료: **{addr}**")
                 else: st.warning("해당 도축장 이름이 행안부 DB에 매칭되지 않습니다.")
         else:
             st.error(f"❌ {result.get('msg')}")
